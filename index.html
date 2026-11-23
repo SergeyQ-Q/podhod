@@ -192,6 +192,15 @@ tr.done .chk{background:var(--ok);color:#fff}
 .hbar i{display:block;height:10px;border-radius:5px;background:var(--accent)}
 .hbar .tr{background:var(--surface-2);border-radius:5px}
 .hbar em{font-style:normal;text-align:right;font-variant-numeric:tabular-nums;color:var(--muted)}
+.cal-h{display:flex;align-items:center;gap:10px}
+.cal-h b{font:700 20px/1.1 var(--f-display);text-transform:uppercase;letter-spacing:.01em}
+.cal{display:grid;grid-template-columns:repeat(7,1fr);row-gap:6px;text-align:center}
+.cal i{font-style:normal;font-size:11px;font-weight:600;letter-spacing:.05em;text-transform:uppercase;color:var(--muted);padding-bottom:2px}
+.cd{justify-self:center;width:38px;height:38px;max-width:100%;border-radius:50%;display:grid;place-items:center;font-size:15px;font-weight:500;font-variant-numeric:tabular-nums;color:var(--fg)}
+.cd.on{background:var(--accent);color:var(--accent-ink);font:700 18px/1 var(--f-display)}
+.cd.on:hover{filter:brightness(1.08)}
+.cd.today{box-shadow:inset 0 0 0 2px var(--accent);color:var(--accent);font-weight:700}
+.cd.on.today{color:var(--accent-ink);box-shadow:0 0 0 2px var(--surface),0 0 0 4px var(--accent)}
 .heat{display:grid;grid-auto-flow:column;grid-template-rows:repeat(7,1fr);gap:4px;overflow-x:auto}
 .heat i{width:100%;min-width:14px;aspect-ratio:1;border-radius:3px;background:var(--surface-2)}
 .heat i.on{background:var(--accent)}
@@ -352,7 +361,7 @@ const COLL={workouts:"workouts",routines:"routines",custom:"exercises"};
 const KEY_BY_COLL={workouts:"workouts",routines:"routines",exercises:"custom"};
 let sb=null,session=null,queue=[];
 const COACH=new URLSearchParams(location.search).get("coach");
-const APP_VERSION="6";
+const APP_VERSION="7";
 async function checkUpdate(){try{const r=await fetch("version.json?t="+Date.now(),{cache:"no-store"});if(!r.ok)return;const v=(await r.json()).v;const busy=document.activeElement&&document.activeElement.matches("input,textarea,select");if(v&&String(v)!==APP_VERSION&&!busy&&!document.querySelector(".sheet,.pop"))location.reload()}catch(e){}}
 function sortData(){S.workouts.sort((a,b)=>b.start-a.start);S.routines.sort((a,b)=>(a.created||0)-(b.created||0));S.custom.sort((a,b)=>a.name.localeCompare(b.name,"ru"))}
 function lsSave(){if(COACH)return;try{localStorage.setItem(LS_KEY,JSON.stringify({workouts:S.workouts,routines:S.routines,custom:S.custom,active:S.active,settings:S.settings,coach:S.coach}))}catch(e){}}
@@ -884,6 +893,21 @@ function barChart(vals,labels,fmt){
     ${labels.map((l,i)=>l?`<text x="${(i===vals.length-1?W-R:L+i*bw+bw/2).toFixed(1)}" y="${H-5}" text-anchor="${i===vals.length-1?"end":"middle"}">${esc(l)}</text>`:"").join("")}</svg>`;
 }
 
+/* ---------- month calendar ---------- */
+function calendarHtml(){
+  const off=S.calOff||0,now=new Date(),base=new Date(now.getFullYear(),now.getMonth()+off,1);
+  const y=base.getFullYear(),mo=base.getMonth(),first=(base.getDay()+6)%7,days=new Date(y,mo+1,0).getDate(),today=dayStart(Date.now());
+  const byDay=new Map();for(const w of S.workouts){const k=dayStart(w.start);if(!byDay.has(k))byDay.set(k,[]);byDay.get(k).push(w)}
+  let cells="",cnt=0;for(let i=0;i<first;i++)cells+="<span></span>";
+  for(let d=1;d<=days;d++){const t=new Date(y,mo,d).getTime(),ws=byDay.get(t),td=t===today?" today":"";
+    if(ws){cnt++;cells+=`<button class="cd on${td}" data-act="cal-day" data-t="${t}" aria-label="${d}, тренировок: ${ws.length}">${d}</button>`}
+    else cells+=`<span class="cd${td}">${d}</span>`}
+  const title=base.toLocaleDateString("ru-RU",{month:"long",year:"numeric"}).replace(/\s*г\.$/,"");
+  const chev=dir=>`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="${dir<0?"M15 5l-7 7 7 7":"M9 5l7 7-7 7"}"/></svg>`;
+  return`<div class="cal-h"><button class="mini" data-act="cal-nav" data-d="-1" aria-label="Предыдущий месяц">${chev(-1)}</button><div class="grow"><b>${esc(title.charAt(0).toUpperCase()+title.slice(1))}</b><div class="small muted">${cnt?`${cnt} ${plural(cnt,"день","дня","дней")} в зале`:"Тренировок не было"}</div></div><button class="mini" data-act="cal-nav" data-d="1" ${off>=0?"disabled":""} aria-label="Следующий месяц">${chev(1)}</button></div>
+  <div class="cal">${["Пн","Вт","Ср","Чт","Пт","Сб","Вс"].map(d=>`<i>${d}</i>`).join("")}${cells}</div>`;
+}
+
 /* ---------- view: progress ---------- */
 function viewProgress(){
   if(!S.workouts.length)return`<h1 class="display">Прогресс</h1><div class="empty"><b>Пока нечего показать</b><p>Здесь будут тренировки по неделям, объём, время в зале, нагрузка по мышцам и календарь.</p><button class="btn primary" data-tab="workout">Начать тренировку</button></div>`;
@@ -911,7 +935,7 @@ function viewProgress(){
     ${barChart(vals,labels,fmt)}</section>
   <section class="card list"><h2>Подходы по мышцам</h2><div class="small muted">Рабочие подходы за 30 дней</div>
     ${mlist.length?mlist.map(([m,c])=>`<div class="hbar"><span>${esc(m)}</span><div class="tr"><i style="width:${(100*c/mmax).toFixed(1)}%"></i></div><em>${c}</em></div>`).join(""):'<p class="small muted">За 30 дней тренировок не было.</p>'}</section>
-  <section class="card list"><h2>Календарь</h2><div class="small muted">Последние 16 недель, по строкам — Пн…Вс</div><div class="heat">${heat}</div></section>
+  <section class="card list"><h2>Календарь</h2>${calendarHtml()}</section>
   ${lifts.length?`<section class="card list"><h2>Лучшие веса</h2>${lifts.map(l=>`<button class="exrow" data-act="ex-info" data-id="${esc(l.id)}"><span class="t"><b>${esc(l.name)}</b><span>${esc(fmtDate(l.t))}</span></span><b class="num">${fmtKg(l.w)}</b></button>`).join("")}</section>`:""}`;
 }
 
@@ -1044,6 +1068,8 @@ document.addEventListener("click",async ev=>{
     case"ex-m":S.exFilter.m=b.dataset.m;render();break;
     case"open-workout":openWorkout(b.dataset.id);break;
     case"prog-metric":S.progMetric=b.dataset.m;render();break;
+    case"cal-nav":S.calOff=Math.min(0,(S.calOff||0)+ +b.dataset.d);render();break;
+    case"cal-day":{const t=+b.dataset.t;const ws=S.workouts.filter(w=>dayStart(w.start)===t);if(ws.length===1)openWorkout(ws[0].id);else if(ws.length)menu(fmtDate(t),ws.map(w=>({label:w.name+" · "+new Date(w.start).toLocaleTimeString("ru-RU",{hour:"2-digit",minute:"2-digit"}),act:()=>openWorkout(w.id)})));break}
   }
 });
 document.addEventListener("input",ev=>{
