@@ -409,7 +409,7 @@ const COLL={workouts:"workouts",routines:"routines",custom:"exercises"};
 const KEY_BY_COLL={workouts:"workouts",routines:"routines",exercises:"custom"};
 let sb=null,session=null,queue=[];
 const COACH=new URLSearchParams(location.search).get("coach");
-const APP_VERSION="12";
+const APP_VERSION="13";
 async function checkUpdate(){try{const r=await fetch("version.json?t="+Date.now(),{cache:"no-store"});if(!r.ok)return;const v=(await r.json()).v;const busy=document.activeElement&&document.activeElement.matches("input,textarea,select");if(v&&String(v)!==APP_VERSION&&!busy&&!document.querySelector(".sheet,.pop"))location.reload()}catch(e){}}
 function sortData(){S.workouts.sort((a,b)=>b.start-a.start);S.routines.sort((a,b)=>(a.created||0)-(b.created||0));S.custom.sort((a,b)=>a.name.localeCompare(b.name,"ru"))}
 function lsSave(){if(COACH)return;try{localStorage.setItem(LS_KEY,JSON.stringify({workouts:S.workouts,routines:S.routines,custom:S.custom,active:S.active,settings:S.settings,coach:S.coach}))}catch(e){}}

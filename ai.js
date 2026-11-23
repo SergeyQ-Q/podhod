@@ -213,7 +213,7 @@ function aiSetupHtml(){
   const p=aiProvider();
   if(p==="gemini")return`<div class="ai-hello"><b>Подключите Gemini — бесплатно</b>
     <p>1. Откройте <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">aistudio.google.com/apikey</a> и войдите своим аккаунтом Google.<br>2. Нажмите <b>Create API key</b> и скопируйте ключ.<br>3. Вставьте его сюда — один раз, он сохранится на этом устройстве.</p>
-    <div class="field" style="width:100%"><label for="ai-key-in">Ключ Gemini</label><input class="input" id="ai-key-in" type="password" autocomplete="off" placeholder="AIza…"></div>
+    <div class="field" style="width:100%"><label for="ai-key-in">Ключ Gemini</label><input class="input" id="ai-key-in" type="password" autocomplete="off" placeholder="AIza… или AQ.…"></div>
     <button class="btn primary block" data-aisavekey>Сохранить и начать</button>
     <p class="small">Бесплатно, но с лимитом запросов в минуту и в день. Подписка Gemini (Google One) на этот лимит не влияет: Google не даёт другим приложениям пользоваться подпиской.</p></div>`;
   return`<div class="ai-hello"><b>Подключите Claude</b><p>Нужен ключ Anthropic API: console.anthropic.com → API Keys. Оплата с вашего счёта Anthropic, обычно центы за разговор. Ключ хранится только на этом устройстве.</p>
@@ -267,7 +267,7 @@ function aiBuild(){
 }
 async function aiSaveKey(p,v,btn){
   if(p==="gemini"){
-    if(!/^AIza[\w-]{20,}$/.test(v)){toast("Ключ Gemini начинается с AIza…");return false}
+    if(!/^[\w.-]{20,}$/.test(v)){toast("Это не похоже на ключ Gemini — скопируйте его целиком кнопкой копирования");return false}
     if(btn){btn.disabled=true;btn.textContent="Проверяю ключ…"}
     try{await aiGLoadModels(v);lsSet(AI_GKEY_LS,v);toast("Gemini подключён");return true}
     catch(e){toast(e.message||"Ключ не подошёл");return false}
@@ -341,7 +341,7 @@ function aiSettingsHtml(){
   const p=aiProvider();
   return`<p class="small muted" style="margin:0">Ключи хранятся только на этом устройстве и не уходят в облако «Подхода».${AI.sample?" В этой версии Claude работает через вашу подписку — ключ не нужен.":""}</p>
   <div class="field"><label for="ai-prov-set">Какой ИИ использовать</label><select class="select" id="ai-prov-set">${aiProviders().map(([v,l])=>`<option value="${v}" ${v===p?"selected":""}>${esc(l)}</option>`).join("")}</select></div>
-  <div class="field"><label for="ai-gkey">Ключ Gemini — бесплатно на aistudio.google.com/apikey</label><input class="input" id="ai-gkey" type="password" autocomplete="off" placeholder="AIza…" value="${esc(aiGKey())}"></div>
+  <div class="field"><label for="ai-gkey">Ключ Gemini — бесплатно на aistudio.google.com/apikey</label><input class="input" id="ai-gkey" type="password" autocomplete="off" placeholder="AIza… или AQ.…" value="${esc(aiGKey())}"></div>
   <div class="field"><label for="ai-gmodel">Модель Gemini</label><select class="select" id="ai-gmodel">${aiGList().map(m=>`<option ${m===aiGModel()?"selected":""}>${esc(m)}</option>`).join("")}</select></div>
   <div class="field"><label for="ai-key">Ключ Claude (Anthropic API, платно)</label><input class="input" id="ai-key" type="password" autocomplete="off" placeholder="sk-ant-…" value="${esc(aiKey())}"></div>
   <div class="field"><label for="ai-model">Модель Claude</label><select class="select" id="ai-model">${AI_MODELS.map(([v,l])=>`<option value="${v}" ${v===aiModel()?"selected":""}>${esc(l)}</option>`).join("")}</select></div>`;
