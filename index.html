@@ -352,7 +352,7 @@ const COLL={workouts:"workouts",routines:"routines",custom:"exercises"};
 const KEY_BY_COLL={workouts:"workouts",routines:"routines",exercises:"custom"};
 let sb=null,session=null,queue=[];
 const COACH=new URLSearchParams(location.search).get("coach");
-const APP_VERSION="4";
+const APP_VERSION="5";
 async function checkUpdate(){try{const r=await fetch("version.json?t="+Date.now(),{cache:"no-store"});if(!r.ok)return;const v=(await r.json()).v;const busy=document.activeElement&&document.activeElement.matches("input,textarea,select");if(v&&String(v)!==APP_VERSION&&!busy&&!document.querySelector(".sheet,.pop"))location.reload()}catch(e){}}
 function sortData(){S.workouts.sort((a,b)=>b.start-a.start);S.routines.sort((a,b)=>(a.created||0)-(b.created||0));S.custom.sort((a,b)=>a.name.localeCompare(b.name,"ru"))}
 function lsSave(){if(COACH)return;try{localStorage.setItem(LS_KEY,JSON.stringify({workouts:S.workouts,routines:S.routines,custom:S.custom,active:S.active,settings:S.settings,coach:S.coach}))}catch(e){}}
@@ -666,8 +666,11 @@ function exEntry(exId,setsN,restSec,info){
   const p=prevSets(exId);const n=setsN||(p?p.length:3);
   const tw=info&&info.w!=null?info.w:null,tr=info&&info.r!=null?info.r:null,plan=tw!=null||tr!=null;
   return{exId,name:x.name,muscle:x.muscle,type:x.type,rest:restSec??S.settings.rest,note:info&&info.note?info.note:null,sets:Array.from({length:n},(_,j)=>{
-    const s={t:!plan&&p&&p[j]&&p[j].t==="w"?"w":"n",w:null,r:null,s:null,done:false};
+    // no plan targets: fill the set with what was done last time (same set number, or the last set)
+    const pj=!plan&&p&&p.length?(p[j]||p[p.length-1]):null;
+    const s={t:pj&&p[j]?(p[j].t||"n"):"n",w:null,r:null,s:null,done:false};
     if(plan){s.auto={};if(tw!=null){s.w=tw;s.auto.w=true}if(tr!=null){if(x.type==="time")s.s=tr;else{s.r=tr;s.auto.r=true}}}
+    else if(pj){s.auto={};if(pj.w!=null){s.w=pj.w;s.auto.w=true}if(pj.r!=null){s.r=pj.r;s.auto.r=true}if(pj.s!=null)s.s=pj.s}
     return s})}}
 function defaultName(){const h=new Date().getHours();return h<12?"Утренняя тренировка":h<17?"Дневная тренировка":"Вечерняя тренировка"}
 function rerenderActive(){const y=scrollY;render();scrollTo(0,y)}
