@@ -352,7 +352,7 @@ const COLL={workouts:"workouts",routines:"routines",custom:"exercises"};
 const KEY_BY_COLL={workouts:"workouts",routines:"routines",exercises:"custom"};
 let sb=null,session=null,queue=[];
 const COACH=new URLSearchParams(location.search).get("coach");
-const APP_VERSION="5";
+const APP_VERSION="6";
 async function checkUpdate(){try{const r=await fetch("version.json?t="+Date.now(),{cache:"no-store"});if(!r.ok)return;const v=(await r.json()).v;const busy=document.activeElement&&document.activeElement.matches("input,textarea,select");if(v&&String(v)!==APP_VERSION&&!busy&&!document.querySelector(".sheet,.pop"))location.reload()}catch(e){}}
 function sortData(){S.workouts.sort((a,b)=>b.start-a.start);S.routines.sort((a,b)=>(a.created||0)-(b.created||0));S.custom.sort((a,b)=>a.name.localeCompare(b.name,"ru"))}
 function lsSave(){if(COACH)return;try{localStorage.setItem(LS_KEY,JSON.stringify({workouts:S.workouts,routines:S.routines,custom:S.custom,active:S.active,settings:S.settings,coach:S.coach}))}catch(e){}}
@@ -646,7 +646,11 @@ function exCard(e,i){
     const p=prev[j];const ptxt=p?setText(p,type):"—";
     const pw=p&&p.w!=null?fmtN(p.w):"",pr=p&&p.r?p.r:"",ps=p&&p.s?p.s:"";
     const inputs=type==="time"?`<td colspan="2"><input class="cell" style="max-width:120px" inputmode="numeric" data-f="s" data-i="${i}" data-j="${j}" value="${s.s??""}" placeholder="${ps||"сек"}" aria-label="Секунды"></td>`
-      :`<td><input class="cell" inputmode="decimal" data-f="w" data-i="${i}" data-j="${j}" value="${s.w!=null?fmtN(s.w).replace(/\s/g,""):""}" placeholder="${type==="bw"?(pw||"+0"):(pw||"0")}" aria-label="Вес"></td><td><input class="cell" inputmode="numeric" data-f="r" data-i="${i}" data-j="${j}" value="${s.r??""}" placeholder="${pr||"0"}" aria-label="Повторения"></td>`;
+      :(()=>{ // auto-filled values (from the last workout or copied from the set above) show as grey hints, not typed numbers
+        const fw=v=>v!=null?fmtN(v).replace(/\s/g,""):"";
+        const gw=!s.done&&s.auto&&s.auto.w&&s.w!=null,gr=!s.done&&s.auto&&s.auto.r&&s.r!=null;
+        const phw=type==="bw"?(pw||"+0"):(pw||"0"),phr=pr||"0";
+        return`<td><input class="cell" inputmode="decimal" data-f="w" data-i="${i}" data-j="${j}" data-ph="${phw}" value="${gw?"":fw(s.w)}" placeholder="${gw?fw(s.w):phw}" aria-label="Вес"></td><td><input class="cell" inputmode="numeric" data-f="r" data-i="${i}" data-j="${j}" data-ph="${phr}" value="${gr?"":(s.r??"")}" placeholder="${gr?s.r:phr}" aria-label="Повторения"></td>`})();
     return`<tr class="${s.done?"done":""}"><td><button class="setlbl t-${s.t||"n"}" data-act="set-menu" data-i="${i}" data-j="${j}" aria-label="Тип подхода">${lbl}</button></td><td class="prev">${p?`<button data-act="use-prev" data-i="${i}" data-j="${j}">${esc(ptxt)}</button>`:"—"}</td>${inputs}<td><button class="chk" data-act="set-done" data-i="${i}" data-j="${j}" aria-label="Подход выполнен" aria-pressed="${!!s.done}">${ICON.check}</button></td></tr>`;
   }).join("");
   const head=type==="time"?'<th>Подход</th><th>Прошлый</th><th colspan="2">Секунды</th><th></th>':`<th>Подход</th><th>Прошлый</th><th>${type==="bw"?"+кг":"кг"}</th><th>Повт.</th><th></th>`;
@@ -1060,7 +1064,7 @@ document.addEventListener("input",ev=>{
       if(o[f]==null||(o.auto&&o.auto[f])){
         o[f]=val;o.auto={...(o.auto||{})};if(val==null)delete o.auto[f];else o.auto[f]=true;
         const el=document.querySelector(`input[data-f="${f}"][data-i="${i}"][data-j="${k}"]`);
-        if(el)el.value=val==null?"":(f==="w"?fmtN(val).replace(/\s/g,""):String(val));
+        if(el){el.value="";el.placeholder=val==null?(el.dataset.ph||""):(f==="w"?fmtN(val).replace(/\s/g,""):String(val))}
       }
     }
     saveActive();updateActiveStats()}
