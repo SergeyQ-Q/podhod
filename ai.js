@@ -158,9 +158,9 @@ const AI_G="https://generativelanguage.googleapis.com/v1beta/";
 async function aiGErr(r){let m="",st="";try{const e=(await r.json()).error;m=e.message||"";st=e.status||""}catch(e){}
   if(r.status===400&&/API key|API_KEY/i.test(m))return"Ключ Gemini не подходит. Проверьте его в настройках.";
   if(r.status===403)return"Ключ Gemini не работает: "+m;
-  if(r.status===429||st==="RESOURCE_EXHAUSTED")return"Бесплатный лимит Gemini на сейчас закончился. Подождите минуту или выберите другую модель в настройках (лимит у каждой свой).";
+  if(r.status===429||st==="RESOURCE_EXHAUSTED")return"Бесплатный лимит Gemini на сейчас закончился у всех моделей. Подождите минуту (или до завтра, если исчерпан дневной лимит).";
   if(r.status===404)return"Эта модель Gemini недоступна. Выберите другую в настройках.";
-  if(r.status>=500)return"Gemini сейчас перегружен. Попробуйте ещё раз через минуту.";
+  if(r.status>=500)return"Все модели Gemini сейчас перегружены. Попробуйте ещё раз через минуту."+(m?" ("+m+")":"");
   return"Ошибка Gemini ("+r.status+"): "+m}
 async function aiGLoadModels(key){ // the list of models this key can use, newest first
   const r=await fetch(AI_G+"models?pageSize=200",{headers:{"x-goog-api-key":key}});if(!r.ok)throw new Error(await aiGErr(r));
@@ -174,16 +174,34 @@ async function aiGLoadModels(key){ // the list of models this key can use, newes
   const cur=lsGet(AI_GMODEL_LS);if(!cur||!list.includes(cur)){const stable=list.find(n=>/flash/.test(n)&&!/lite|preview|exp/.test(n))||list[0];if(stable)lsSet(AI_GMODEL_LS,stable)}
   return list;
 }
+// busy or rate-limited model: wait and retry, then fall back to other Gemini models (each has its own free limit)
+const aiSleep=(ms,signal)=>new Promise((res,rej)=>{const t=setTimeout(res,ms);signal&&signal.addEventListener("abort",()=>{clearTimeout(t);rej({code:"cancelled"})},{once:true})});
+async function aiGPost(body,signal){
+  const first=AI.gUsed||aiGModel(),list=aiGList();
+  const stable=m=>!/preview|exp/.test(m);
+  const order=[first,...list.filter(m=>m!==first&&/flash/.test(m)&&stable(m)),...list.filter(m=>m!==first&&/flash/.test(m)&&!stable(m)),...list.filter(m=>m!==first&&!/flash/.test(m))].slice(0,5);
+  let last=null;
+  for(const m of order){
+    for(let attempt=0;attempt<2;attempt++){
+      let r;
+      try{r=await fetch(AI_G+"models/"+encodeURIComponent(m)+":generateContent",{method:"POST",signal,headers:{"content-type":"application/json","x-goog-api-key":aiGKey()},body})}
+      catch(e){if(e&&e.name==="AbortError")throw{code:"cancelled"};throw{code:"network",message:"Нет связи с Gemini. Проверьте интернет."}}
+      if(r.ok){AI.gUsed=m;return r}
+      last=r;
+      if(!(r.status>=500||r.status===429||r.status===404))throw{code:"http",message:await aiGErr(r)};
+      if(r.status===404)break;
+      if(attempt===0){const l=$("#ai-live");if(l&&l.classList.contains("ai-wait"))l.textContent="Gemini занят, пробую ещё раз…";await aiSleep(1500,signal)}
+    }
+    const l=$("#ai-live");if(l&&l.classList.contains("ai-wait"))l.textContent="Пробую другую модель Gemini…";
+  }
+  throw{code:"http",message:await aiGErr(last)};
+}
 async function aiViaGemini(system,turns,onText,signal){
   const contents=turns.map(t=>({role:t.role==="assistant"?"model":"user",parts:[{text:t.content}]}));
   const tools=[{functionDeclarations:AI_TOOLS.map(t=>({name:t.name,description:t.description,parameters:aiGSchema(t.inputSchema)}))}];
   let shown="";
   for(let round=0;round<10;round++){
-    let r;
-    try{r=await fetch(AI_G+"models/"+encodeURIComponent(aiGModel())+":generateContent",{method:"POST",signal,headers:{"content-type":"application/json","x-goog-api-key":aiGKey()},
-      body:JSON.stringify({systemInstruction:{parts:[{text:system}]},contents,tools})})}
-    catch(e){if(e&&e.name==="AbortError")throw{code:"cancelled"};throw{code:"network",message:"Нет связи с Gemini. Проверьте интернет."}}
-    if(!r.ok)throw{code:"http",message:await aiGErr(r)};
+    const r=await aiGPost(JSON.stringify({systemInstruction:{parts:[{text:system}]},contents,tools}),signal);
     const d=await r.json();const c=d.candidates&&d.candidates[0];
     if(!c||!c.content){if(shown)return shown;throw{code:"blocked",message:"Gemini не ответил"+(d.promptFeedback&&d.promptFeedback.blockReason?" (заблокировано фильтром)":"")+". Переформулируйте вопрос."}}
     const parts=c.content.parts||[];
@@ -289,7 +307,7 @@ async function aiSend(){
   const sh=AI.sheet;if(!sh||AI.busy)return;
   const inp=$("#ai-in",sh.el);const text=inp.value.trim();if(!text)return;
   aiMicStop();inp.value="";inp.style.height="auto";
-  AI.turns.push({role:"user",content:text});AI.busy=true;AI.done=[];AI.ctl=new AbortController();aiDraw();
+  AI.gUsed=null;AI.turns.push({role:"user",content:text});AI.busy=true;AI.done=[];AI.ctl=new AbortController();aiDraw();
   const clean=[];for(const t of AI.turns.filter(t=>t.content).map(t=>({role:t.role,content:t.content}))){if(clean.length&&clean[clean.length-1].role===t.role)clean[clean.length-1].content+="\n\n"+t.content;else clean.push(t)}
   while(clean.length&&clean[0].role!=="user")clean.shift();
   const p=aiProvider();
@@ -298,6 +316,7 @@ async function aiSend(){
     const fn=p==="claude-sub"?aiViaClaude:p==="gemini"?aiViaGemini:aiViaApi;
     reply.content=await fn(aiSystem(),clean.slice(-20),txt=>{const l=$("#ai-live");if(l){l.innerHTML=aiMd(txt);l.classList.remove("ai-wait")}},AI.ctl.signal);
     if(!reply.content)reply.content=AI.done.length?"Готово.":"…";
+    if(p==="gemini"&&AI.gUsed)reply.by=AI.gUsed;
   }catch(e){
     if(e&&e.code==="cancelled")reply.err="Остановлено";
     else reply.err=(e&&e.message)||"Не получилось связаться с ИИ";
