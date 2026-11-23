@@ -267,6 +267,12 @@ textarea.input{height:auto;min-height:120px;padding:10px 12px;font:13px/1.4 ui-m
 .syncdot.big{width:14px;height:14px}
 .iconbtn{position:relative}
 .iconbtn .syncdot{position:absolute;top:7px;right:6px;border:2px solid var(--bg);width:11px;height:11px;box-sizing:content-box}
+/* swipe a routine card left to delete it */
+.rsw{position:relative;border-radius:var(--r);overflow:hidden}
+.rdel{position:absolute;inset:0;background:var(--bad);color:#fff;display:flex;align-items:center;justify-content:flex-end;padding-right:22px;font-weight:700;font-size:15px;opacity:0;border-radius:var(--r)}
+.rsw.swiping .rdel{opacity:1}
+.rcard{position:relative;transition:transform .2s ease;touch-action:pan-y}
+.rcard.dragging{transition:none;user-select:none;-webkit-user-select:none}
 /* AI coach: panel floating over the app (above the tab bar), minimizable to a bubble */
 .tabs .wrap.ai5{grid-template-columns:repeat(5,1fr)}
 .tabs .ai-tab{color:var(--accent)}
@@ -409,7 +415,7 @@ const COLL={workouts:"workouts",routines:"routines",custom:"exercises"};
 const KEY_BY_COLL={workouts:"workouts",routines:"routines",exercises:"custom"};
 let sb=null,session=null,queue=[];
 const COACH=new URLSearchParams(location.search).get("coach");
-const APP_VERSION="14";
+const APP_VERSION="15";
 async function checkUpdate(){try{const r=await fetch("version.json?t="+Date.now(),{cache:"no-store"});if(!r.ok)return;const v=(await r.json()).v;const busy=document.activeElement&&document.activeElement.matches("input,textarea,select");if(v&&String(v)!==APP_VERSION&&!busy&&!document.querySelector(".sheet,.pop"))location.reload()}catch(e){}}
 function sortData(){S.workouts.sort((a,b)=>b.start-a.start);S.routines.sort((a,b)=>(a.created||0)-(b.created||0));S.custom.sort((a,b)=>a.name.localeCompare(b.name,"ru"))}
 function lsSave(){if(COACH)return;try{localStorage.setItem(LS_KEY,JSON.stringify({workouts:S.workouts,routines:S.routines,custom:S.custom,active:S.active,settings:S.settings,coach:S.coach}))}catch(e){}}
@@ -669,7 +675,7 @@ function viewStart(){
   const thisWeek=S.workouts.filter(w=>w.start>=ws);
   const days=["Пн","Вт","Ср","Чт","Пт","Сб","Вс"].map((d,i)=>{const t=ws+i*864e5;const on=S.workouts.some(w=>dayStart(w.start)===dayStart(t));return`<div class="${on?"on":""} ${dayStart(t)===today?"today":""}"><i></i>${d}</div>`}).join("");
   const vol=thisWeek.reduce((a,w)=>a+wVolume(w),0);
-  const routines=S.routines.length?S.routines.map(r=>`<article class="card routine"><h3>${esc(r.name)}</h3>${r.note?`<div class="small muted">${esc(r.note)}</div>`:""}<p>${esc(r.items.map(it=>exInfo(it).name).join(" · "))}</p><div class="row"><button class="btn primary grow" data-act="start-routine" data-id="${esc(r.id)}">Начать</button><button class="btn" data-act="edit-routine" data-id="${esc(r.id)}">Изменить</button></div></article>`).join("")
+  const routines=S.routines.length?S.routines.map(r=>`<div class="rsw"><div class="rdel" aria-hidden="true">Удалить</div><article class="card routine rcard" data-id="${esc(r.id)}"><h3>${esc(r.name)}</h3>${r.note?`<div class="small muted">${esc(r.note)}</div>`:""}<p>${esc(r.items.map(it=>exInfo(it).name).join(" · "))}</p><div class="row"><button class="btn primary grow" data-act="start-routine" data-id="${esc(r.id)}">Начать</button><button class="btn" data-act="edit-routine" data-id="${esc(r.id)}">Изменить</button></div></article></div>`).join("")
    :`<div class="empty"><b>Программ пока нет</b><p>Программа — это шаблон тренировки: список упражнений, число подходов и отдых. Запускается одним нажатием.</p><div class="row" style="justify-content:center"><button class="btn primary" data-act="new-routine">Создать программу</button><button class="btn" data-act="sample-routines">Добавить 3 примера</button></div></div>`;
   const coachSec=S.coach.length?`<section class="list"><div class="sec-head"><h2>От тренера</h2></div>${S.coach.map(r=>`<article class="card routine coachplan"><h3>${esc(r.name)}</h3>${r.note?`<div class="small muted">${esc(r.note)}</div>`:""}<p>${esc(r.items.map(planLine).join(" · "))}</p><div class="row"><button class="btn primary grow" data-act="start-coach" data-id="${esc(r.id)}">Начать</button><button class="btn" data-act="copy-coach" data-id="${esc(r.id)}">В мои программы</button></div></article>`).join("")}</section>`:"";
   return`<section class="start">
@@ -1102,6 +1108,29 @@ document.addEventListener("pointerup",()=>{
   else{s.r.style.transform="";setTimeout(()=>s.r.parentElement&&s.r.parentElement.classList.remove("swiping"),220)}
 });
 document.addEventListener("pointercancel",()=>{if(swp&&swp.on){swp.r.classList.remove("dragging");swp.r.style.transform="";swp.r.parentElement.classList.remove("swiping","right")}swp=null});
+
+/* ---------- swipe a routine card left to delete it (with «Вернуть») ---------- */
+let rsw=null,rswBlock=0;
+function deleteRoutine(id){const r=S.routines.find(x=>x.id===id);if(!r)return;del("routines",id);render();
+  toast("Программа удалена",{label:"Вернуть",act:async()=>{if(!S.routines.some(x=>x.id===r.id))await put("routines",r);render()}})}
+document.addEventListener("pointerdown",ev=>{if(ev.button>0)return;const c=ev.target.closest(".rcard");if(!c)return;rsw={c,x:ev.clientX,y:ev.clientY,dx:0,on:false,id:ev.pointerId}});
+document.addEventListener("pointermove",ev=>{
+  if(!rsw||ev.pointerId!==rsw.id)return;const dx=ev.clientX-rsw.x,dy=ev.clientY-rsw.y;
+  if(!rsw.on){
+    if(Math.abs(dy)>10&&Math.abs(dy)>Math.abs(dx)){rsw=null;return}
+    if(dx<-12&&Math.abs(dx)>Math.abs(dy)*1.2){rsw.on=true;rsw.c.classList.add("dragging");rsw.c.parentElement.classList.add("swiping");try{rsw.c.setPointerCapture(ev.pointerId)}catch(e){}}
+    else return;
+  }
+  rsw.dx=Math.min(0,dx);rsw.c.style.transform=`translateX(${rsw.dx}px)`;ev.preventDefault();
+},{passive:false});
+document.addEventListener("pointerup",()=>{
+  if(!rsw)return;const s=rsw;rsw=null;if(!s.on)return;rswBlock=Date.now();s.c.classList.remove("dragging");
+  const w=s.c.offsetWidth;
+  if(s.dx<-Math.min(120,w*.35)){s.c.style.transform=`translateX(${-w}px)`;setTimeout(()=>deleteRoutine(s.c.dataset.id),170)}
+  else{s.c.style.transform="";setTimeout(()=>s.c.parentElement&&s.c.parentElement.classList.remove("swiping"),220)}
+});
+document.addEventListener("pointercancel",()=>{if(rsw&&rsw.on){rsw.c.classList.remove("dragging");rsw.c.style.transform="";rsw.c.parentElement.classList.remove("swiping")}rsw=null});
+document.addEventListener("click",ev=>{if(rswBlock&&Date.now()-rswBlock<400&&ev.target.closest(".rcard")){rswBlock=0;ev.preventDefault();ev.stopPropagation()}},true);
 
 /* ---------- events ---------- */
 document.addEventListener("click",async ev=>{
