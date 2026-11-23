@@ -268,7 +268,10 @@ textarea.input{height:auto;min-height:120px;padding:10px 12px;font:13px/1.4 ui-m
 .iconbtn{position:relative}
 .iconbtn .syncdot{position:absolute;top:7px;right:6px;border:2px solid var(--bg);width:11px;height:11px;box-sizing:content-box}
 /* AI coach */
-.ai-top svg{color:var(--accent)}
+.tabs .wrap.ai5{grid-template-columns:repeat(5,1fr)}
+.tabs .ai-tab{color:var(--accent)}
+.ai-tab-ic{width:34px;height:26px;border-radius:13px;background:var(--accent);color:var(--accent-ink);display:grid;place-items:center}
+.tabs .ai-tab .ai-tab-ic svg{width:18px;height:18px}
 .ai-sheet .sheet-b .wrap{gap:10px;padding-bottom:16px}
 .ai-hello{display:flex;flex-direction:column;gap:10px;align-items:flex-start;padding:8px 0}
 .ai-hello b{font:700 22px/1.1 var(--f-display);text-transform:uppercase}
@@ -393,7 +396,7 @@ const COLL={workouts:"workouts",routines:"routines",custom:"exercises"};
 const KEY_BY_COLL={workouts:"workouts",routines:"routines",exercises:"custom"};
 let sb=null,session=null,queue=[];
 const COACH=new URLSearchParams(location.search).get("coach");
-const APP_VERSION="10";
+const APP_VERSION="11";
 async function checkUpdate(){try{const r=await fetch("version.json?t="+Date.now(),{cache:"no-store"});if(!r.ok)return;const v=(await r.json()).v;const busy=document.activeElement&&document.activeElement.matches("input,textarea,select");if(v&&String(v)!==APP_VERSION&&!busy&&!document.querySelector(".sheet,.pop"))location.reload()}catch(e){}}
 function sortData(){S.workouts.sort((a,b)=>b.start-a.start);S.routines.sort((a,b)=>(a.created||0)-(b.created||0));S.custom.sort((a,b)=>a.name.localeCompare(b.name,"ru"))}
 function lsSave(){if(COACH)return;try{localStorage.setItem(LS_KEY,JSON.stringify({workouts:S.workouts,routines:S.routines,custom:S.custom,active:S.active,settings:S.settings,coach:S.coach}))}catch(e){}}

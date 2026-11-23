@@ -260,9 +260,10 @@ function aiSettingsBind(el){
 }
 (function aiMount(){
   if(typeof COACH!=="undefined"&&COACH)return; // the coach's page has no assistant
-  const st=document.querySelector('.top [data-act="settings"]');if(!st)return;
-  const b=document.createElement("button");b.className="iconbtn ai-top";b.dataset.act="ai";b.setAttribute("aria-label","ИИ-тренер");
-  b.innerHTML='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l1.8 4.7L18.5 9.5l-4.7 1.8L12 16l-1.8-4.7L5.5 9.5l4.7-1.8z"/><path d="M19 15l.8 2.2L22 18l-2.2.8L19 21l-.8-2.2L16 18l2.2-.8z"/></svg>';
-  st.parentNode.insertBefore(b,st);
+  // the AI button sits in the tab bar, between «История» and «Упражнения»
+  const h=document.querySelector('#tabs [data-tab="history"]');
+  if(h){const b=document.createElement("button");b.className="ai-tab";b.dataset.act="ai";b.setAttribute("aria-label","ИИ-тренер");
+    b.innerHTML='<span class="ai-tab-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l1.8 4.7L18.5 9.5l-4.7 1.8L12 16l-1.8-4.7L5.5 9.5l4.7-1.8z"/><path d="M19 15l.8 2.2L22 18l-2.2.8L19 21l-.8-2.2L16 18l2.2-.8z"/></svg></span>ИИ';
+    h.after(b);h.parentNode.classList.add("ai5")}
   document.addEventListener("click",ev=>{const t=ev.target.closest('[data-act="ai"],[data-act="ai-voice"]');if(!t)return;ev.stopPropagation();openAI({listen:t.dataset.act==="ai-voice"})},true);
 })();
