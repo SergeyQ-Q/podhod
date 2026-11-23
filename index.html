@@ -267,15 +267,24 @@ textarea.input{height:auto;min-height:120px;padding:10px 12px;font:13px/1.4 ui-m
 .syncdot.big{width:14px;height:14px}
 .iconbtn{position:relative}
 .iconbtn .syncdot{position:absolute;top:7px;right:6px;border:2px solid var(--bg);width:11px;height:11px;box-sizing:content-box}
-/* AI coach */
+/* AI coach: panel floating over the app (above the tab bar), minimizable to a bubble */
 .tabs .wrap.ai5{grid-template-columns:repeat(5,1fr)}
 .tabs .ai-tab{color:var(--accent)}
 .ai-tab-ic{width:34px;height:26px;border-radius:13px;background:var(--accent);color:var(--accent-ink);display:grid;place-items:center}
 .tabs .ai-tab .ai-tab-ic svg{width:18px;height:18px}
-.ai-sheet .sheet-b .wrap{gap:10px;padding-bottom:16px}
-.ai-hello{display:flex;flex-direction:column;gap:10px;align-items:flex-start;padding:8px 0}
-.ai-hello b{font:700 22px/1.1 var(--f-display);text-transform:uppercase}
+.ai-panel{position:fixed;z-index:8;left:50%;transform:translateX(-50%);width:min(640px,100%);bottom:calc(var(--tab-h) + env(safe-area-inset-bottom,0px));height:min(72vh,640px);background:var(--bg);border:1px solid var(--line);border-bottom:0;border-radius:18px 18px 0 0;box-shadow:0 -10px 40px rgba(0,0,0,.28);display:flex;flex-direction:column;animation:up .18s ease-out}
+.ai-head{flex:none;display:flex;align-items:center;gap:6px;padding:8px 8px 8px 12px;border-bottom:1px solid var(--line)}
+.ai-head-ic{color:var(--accent);display:grid;place-items:center}
+.ai-head-ic svg{width:22px;height:22px}
+.ai-prov{height:36px;border:1px solid var(--line);border-radius:10px;background:var(--surface);padding:0 8px;font-weight:600;font-size:15px;max-width:52%}
+.ai-hb{width:38px;height:38px;border-radius:10px;display:grid;place-items:center;color:var(--muted)}
+.ai-hb:hover{background:var(--surface-2);color:var(--fg)}
+.ai-hb svg{width:20px;height:20px}
+.ai-body{flex:1;overflow-y:auto;-webkit-overflow-scrolling:touch;display:flex;flex-direction:column;gap:10px;padding:12px}
+.ai-hello{display:flex;flex-direction:column;gap:10px;align-items:flex-start}
+.ai-hello b{font:700 20px/1.1 var(--f-display);text-transform:uppercase}
 .ai-hello p{margin:0;color:var(--muted)}
+.ai-hello a{color:var(--accent);font-weight:600}
 .ai-chips{display:flex;flex-wrap:wrap;gap:6px}
 .ai-chips .chip{height:auto;min-height:32px;padding:6px 12px;text-align:left;color:var(--fg)}
 .ai-m{max-width:88%;padding:10px 13px;border-radius:14px;line-height:1.45;overflow-wrap:anywhere}
@@ -286,13 +295,17 @@ textarea.input{height:auto;min-height:120px;padding:10px 12px;font:13px/1.4 ui-m
 .ai-done{display:flex;flex-direction:column;gap:4px;margin-top:8px}
 .ai-done span{font-size:13px;font-weight:600;color:var(--ok);background:var(--ok-soft);border-radius:8px;padding:4px 8px}
 .ai-err{margin-top:6px;font-size:13px;color:var(--bad)}
-.ai-foot{flex:none;border-top:1px solid var(--line);background:var(--bg);padding-bottom:env(safe-area-inset-bottom,0px)}
-.ai-foot .wrap{display:flex;align-items:flex-end;gap:8px;padding-block:8px}
-.ai-foot textarea{flex:1;min-width:0;min-height:44px;max-height:140px;resize:none;border:1px solid var(--line);border-radius:12px;background:var(--surface);color:var(--fg);padding:11px 12px;font:16px/1.35 var(--f-body)}
+.ai-by{margin-top:6px;font-size:11px;color:var(--muted)}
+.ai-foot{flex:none;display:flex;align-items:flex-end;gap:8px;padding:8px 10px;border-top:1px solid var(--line)}
+.ai-foot textarea{flex:1;min-width:0;min-height:44px;max-height:120px;resize:none;border:1px solid var(--line);border-radius:12px;background:var(--surface);color:var(--fg);padding:11px 12px;font:16px/1.35 var(--f-body)}
 .ai-foot .btn{min-height:44px}
 .ai-mic{flex:none;width:44px;height:44px;border-radius:50%;display:grid;place-items:center;background:var(--surface-2);color:var(--fg)}
 .ai-mic svg{width:22px;height:22px}
 .ai-mic.on{background:var(--bad);color:#fff;animation:aipulse 1.2s ease-in-out infinite}
+#ai-bubble{position:fixed;z-index:8;right:max(16px,env(safe-area-inset-right,0px));bottom:calc(var(--tab-h) + env(safe-area-inset-bottom,0px) + 84px);width:56px;height:56px;border-radius:50%;background:var(--accent);color:var(--accent-ink);display:grid;place-items:center;box-shadow:0 6px 20px rgba(0,0,0,.3)}
+#ai-bubble svg{width:26px;height:26px}
+#ai-bubble.busy{animation:aipulse 1.2s ease-in-out infinite}
+#ai-bubble.unread::after{content:"";position:absolute;top:2px;right:2px;width:14px;height:14px;border-radius:50%;background:var(--bad);border:2px solid var(--bg)}
 </style>
 </head>
 <body>
@@ -396,7 +409,7 @@ const COLL={workouts:"workouts",routines:"routines",custom:"exercises"};
 const KEY_BY_COLL={workouts:"workouts",routines:"routines",exercises:"custom"};
 let sb=null,session=null,queue=[];
 const COACH=new URLSearchParams(location.search).get("coach");
-const APP_VERSION="11";
+const APP_VERSION="12";
 async function checkUpdate(){try{const r=await fetch("version.json?t="+Date.now(),{cache:"no-store"});if(!r.ok)return;const v=(await r.json()).v;const busy=document.activeElement&&document.activeElement.matches("input,textarea,select");if(v&&String(v)!==APP_VERSION&&!busy&&!document.querySelector(".sheet,.pop"))location.reload()}catch(e){}}
 function sortData(){S.workouts.sort((a,b)=>b.start-a.start);S.routines.sort((a,b)=>(a.created||0)-(b.created||0));S.custom.sort((a,b)=>a.name.localeCompare(b.name,"ru"))}
 function lsSave(){if(COACH)return;try{localStorage.setItem(LS_KEY,JSON.stringify({workouts:S.workouts,routines:S.routines,custom:S.custom,active:S.active,settings:S.settings,coach:S.coach}))}catch(e){}}

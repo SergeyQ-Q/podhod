@@ -1,19 +1,29 @@
-/* ---------- ИИ-тренер: чат, голос, действия в приложении ----------
-   Работает двумя способами:
-   • в версии на claude.ai — через аккаунт Claude (capability "sample"), ключ не нужен;
-   • на сайте — через API Anthropic с ключом, который хранится только на этом устройстве. */
+/* ---------- ИИ-тренер: панель поверх приложения, выбор ИИ, голос, действия ----------
+   ИИ на выбор:
+   • Gemini (Google) — бесплатный ключ из Google AI Studio, дневной лимит бесплатных запросов;
+   • Claude — ключ Anthropic API (платно);
+   • Claude по подписке — только в версии на claude.ai, ключ не нужен.
+   Ключи хранятся только на этом устройстве. */
 "use strict";
-const AI={turns:[],busy:false,ctl:null,sheet:null,rec:null,listening:false,dict:null,sample:null,done:[]};
-const AI_KEY_LS="podhod:ai-key",AI_MODEL_LS="podhod:ai-model";
+const AI={turns:[],busy:false,ctl:null,sheet:null,rec:null,listening:false,dict:null,sample:null,done:[],state:"closed",unread:false};
+const AI_KEY_LS="podhod:ai-key",AI_MODEL_LS="podhod:ai-model",AI_GKEY_LS="podhod:ai-gkey",AI_GMODEL_LS="podhod:ai-gmodel",AI_GLIST_LS="podhod:ai-glist",AI_PROV_LS="podhod:ai-provider";
 const AI_MODELS=[["claude-sonnet-5-5","Sonnet 5.5 — быстрый и умный"],["claude-haiku-5-5","Haiku 5.5 — самый дешёвый"],["claude-opus-5-5","Opus 5.5 — самый умный, дороже"]];
+const AI_GFALLBACK=["gemini-2.5-flash","gemini-2.5-pro","gemini-2.5-flash-lite"];
 const AI_HAS_CLAUDE=!!(window.claude&&typeof window.claude.use==="function");
 if(AI_HAS_CLAUDE){
-  window.claude.use("sample").then(s=>{AI.sample=s;aiRefreshButtons()}).catch(()=>{});
+  window.claude.use("sample").then(s=>{AI.sample=s;aiRefreshAll()}).catch(()=>{});
   window.claude.use("dictation").then(d=>{AI.dict=d;aiRefreshButtons()}).catch(()=>{});
 }
-function aiKey(){try{return localStorage.getItem(AI_KEY_LS)||""}catch(e){return""}}
-function aiModel(){try{return localStorage.getItem(AI_MODEL_LS)||AI_MODELS[0][0]}catch(e){return AI_MODELS[0][0]}}
-function aiMode(){return AI.sample?"claude":aiKey()?"api":null}
+function lsGet(k,d=""){try{return localStorage.getItem(k)||d}catch(e){return d}}
+function lsSet(k,v){try{v?localStorage.setItem(k,v):localStorage.removeItem(k)}catch(e){}}
+function aiKey(){return lsGet(AI_KEY_LS)}
+function aiModel(){return lsGet(AI_MODEL_LS,AI_MODELS[0][0])}
+function aiGKey(){return lsGet(AI_GKEY_LS)}
+function aiGList(){try{const l=JSON.parse(lsGet(AI_GLIST_LS,"null"));if(Array.isArray(l)&&l.length)return l}catch(e){}return AI_GFALLBACK}
+function aiGModel(){const m=lsGet(AI_GMODEL_LS);return m||aiGList()[0]}
+function aiProviders(){const p=[];if(AI.sample)p.push(["claude-sub","Claude (подписка)"]);p.push(["gemini","Gemini"],["claude","Claude (ключ)"]);return p}
+function aiProvider(){const p=lsGet(AI_PROV_LS);const ids=aiProviders().map(x=>x[0]);return ids.includes(p)?p:ids[0]}
+function aiReady(){const p=aiProvider();return p==="claude-sub"?!!AI.sample:p==="gemini"?!!aiGKey():!!aiKey()}
 const AI_SR=window.SpeechRecognition||window.webkitSpeechRecognition;
 function aiCanVoice(){return!!(AI.dict||AI_SR)}
 
@@ -141,78 +151,159 @@ async function aiViaClaude(system,turns,onText,signal){
   catch(e){if(e&&e.code==="cancelled")throw e;throw{code:e&&e.code,message:e&&e.code==="not_granted"?"Доступ к Claude не разрешён для этой страницы.":e&&e.code==="rate_limited"?"Слишком много запросов — подождите немного.":"Ошибка ИИ: "+((e&&e.message)||"")}}
 }
 
-/* ---------- chat UI ---------- */
-function aiMd(t){return esc(t).replace(/\*\*(.+?)\*\*/g,"<b>$1</b>").replace(/^[-*] /gm,"• ").replace(/\n/g,"<br>")}
+/* ---------- Gemini (Google) ---------- */
+function aiGSchema(s){const o={};if(s.type)o.type=String(s.type).toUpperCase();if(s.description)o.description=s.description;if(s.enum)o.enum=s.enum;
+  if(s.properties){o.properties={};for(const k in s.properties)o.properties[k]=aiGSchema(s.properties[k])}if(s.required)o.required=s.required;if(s.items)o.items=aiGSchema(s.items);return o}
+const AI_G="https://generativelanguage.googleapis.com/v1beta/";
+async function aiGErr(r){let m="",st="";try{const e=(await r.json()).error;m=e.message||"";st=e.status||""}catch(e){}
+  if(r.status===400&&/API key|API_KEY/i.test(m))return"Ключ Gemini не подходит. Проверьте его в настройках.";
+  if(r.status===403)return"Ключ Gemini не работает: "+m;
+  if(r.status===429||st==="RESOURCE_EXHAUSTED")return"Бесплатный лимит Gemini на сейчас закончился. Подождите минуту или выберите другую модель в настройках (лимит у каждой свой).";
+  if(r.status===404)return"Эта модель Gemini недоступна. Выберите другую в настройках.";
+  if(r.status>=500)return"Gemini сейчас перегружен. Попробуйте ещё раз через минуту.";
+  return"Ошибка Gemini ("+r.status+"): "+m}
+async function aiGLoadModels(key){ // the list of models this key can use, newest first
+  const r=await fetch(AI_G+"models?pageSize=200",{headers:{"x-goog-api-key":key}});if(!r.ok)throw new Error(await aiGErr(r));
+  const d=await r.json();
+  const ver=n=>{const m=n.match(/gemini-(\d+(?:\.\d+)?)/);return m?parseFloat(m[1]):0};
+  const rank=n=>/flash-lite/.test(n)?1:/flash/.test(n)?0:/pro/.test(n)?2:3;
+  const list=(d.models||[]).filter(m=>(m.supportedGenerationMethods||[]).includes("generateContent")).map(m=>m.name.replace(/^models\//,""))
+    .filter(n=>/^gemini-/.test(n)&&!/embed|tts|image|audio|live|native|learnlm|robotics|computer/.test(n))
+    .sort((a,b)=>ver(b)-ver(a)||rank(a)-rank(b)||(/preview|exp/.test(a)?1:0)-(/preview|exp/.test(b)?1:0)||a.localeCompare(b));
+  if(list.length)lsSet(AI_GLIST_LS,JSON.stringify(list.slice(0,30)));
+  const cur=lsGet(AI_GMODEL_LS);if(!cur||!list.includes(cur)){const stable=list.find(n=>/flash/.test(n)&&!/lite|preview|exp/.test(n))||list[0];if(stable)lsSet(AI_GMODEL_LS,stable)}
+  return list;
+}
+async function aiViaGemini(system,turns,onText,signal){
+  const contents=turns.map(t=>({role:t.role==="assistant"?"model":"user",parts:[{text:t.content}]}));
+  const tools=[{functionDeclarations:AI_TOOLS.map(t=>({name:t.name,description:t.description,parameters:aiGSchema(t.inputSchema)}))}];
+  let shown="";
+  for(let round=0;round<10;round++){
+    let r;
+    try{r=await fetch(AI_G+"models/"+encodeURIComponent(aiGModel())+":generateContent",{method:"POST",signal,headers:{"content-type":"application/json","x-goog-api-key":aiGKey()},
+      body:JSON.stringify({systemInstruction:{parts:[{text:system}]},contents,tools})})}
+    catch(e){if(e&&e.name==="AbortError")throw{code:"cancelled"};throw{code:"network",message:"Нет связи с Gemini. Проверьте интернет."}}
+    if(!r.ok)throw{code:"http",message:await aiGErr(r)};
+    const d=await r.json();const c=d.candidates&&d.candidates[0];
+    if(!c||!c.content){if(shown)return shown;throw{code:"blocked",message:"Gemini не ответил"+(d.promptFeedback&&d.promptFeedback.blockReason?" (заблокировано фильтром)":"")+". Переформулируйте вопрос."}}
+    const parts=c.content.parts||[];
+    const text=parts.filter(p=>p.text&&!p.thought).map(p=>p.text).join("").trim();
+    if(text){shown+=(shown?"\n\n":"")+text;onText(shown)}
+    contents.push({role:"model",parts});
+    const calls=parts.filter(p=>p.functionCall);
+    if(!calls.length)return shown;
+    const res=[];
+    for(const p of calls){const fc=p.functionCall;const t=AI_TOOLS.find(x=>x.name===fc.name);let out;
+      try{if(!t)throw new Error("Нет такого инструмента");const v=await t.execute(fc.args||{});out={result:v}}catch(e){out={error:(e&&e.message)||String(e)}}
+      res.push({functionResponse:{name:fc.name,response:out}})}
+    contents.push({role:"user",parts:res});
+  }
+  return shown;
+}
+
+/* ---------- panel UI: floats over the app, can be minimized to a bubble ---------- */
+function aiMd(t){return esc(t).replace(/\*\*(.+?)\*\*/g,"<b>$1</b>").replace(/^\s*[-*] /gm,"• ").replace(/\n/g,"<br>")}
 const AI_CHIPS=["Составь программу на 3 дня в неделю","Разбери мой прогресс","Тренажёр занят — чем заменить?","Какой вес взять сегодня?","Добавь в тренировку жим лёжа 4 подхода"];
+const AI_ICON='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l1.8 4.7L18.5 9.5l-4.7 1.8L12 16l-1.8-4.7L5.5 9.5l4.7-1.8z"/><path d="M19 15l.8 2.2L22 18l-2.2.8L19 21l-.8-2.2L16 18l2.2-.8z"/></svg>';
 function aiMsgsHtml(){
-  if(!AI.turns.length)return`<div class="ai-hello"><b>ИИ-тренер</b><p>Пишите или говорите: «добавь присед 5 по 5», «жим 80 на 8», «создай упражнение жим в Смите», «составь программу на массу».</p><div class="ai-chips">${AI_CHIPS.map(c=>`<button class="chip" data-aichip>${esc(c)}</button>`).join("")}</div></div>`;
-  return AI.turns.map(t=>t.role==="user"?`<div class="ai-m me">${esc(t.content)}</div>`:`<div class="ai-m bot">${aiMd(t.content)}${t.done&&t.done.length?`<div class="ai-done">${t.done.map(d=>`<span>✓ ${esc(d)}</span>`).join("")}</div>`:""}${t.err?`<div class="ai-err">${esc(t.err)}</div>`:""}</div>`).join("");
+  if(!AI.turns.length)return`<div class="ai-hello"><p>Пишите или говорите: «добавь присед 5 по 5», «жим 80 на 8», «создай упражнение жим в Смите», «составь программу на массу». Панель можно свернуть кнопкой ⌄ и вернуться в любой момент.</p><div class="ai-chips">${AI_CHIPS.map(c=>`<button class="chip" data-aichip>${esc(c)}</button>`).join("")}</div></div>`;
+  return AI.turns.map(t=>t.role==="user"?`<div class="ai-m me">${esc(t.content)}</div>`:`<div class="ai-m bot">${t.content?aiMd(t.content):""}${t.done&&t.done.length?`<div class="ai-done">${t.done.map(d=>`<span>✓ ${esc(d)}</span>`).join("")}</div>`:""}${t.err?`<div class="ai-err">${esc(t.err)}</div>`:""}${t.by?`<div class="ai-by">${esc(t.by)}</div>`:""}</div>`).join("");
 }
 function aiSetupHtml(){
-  return`<div class="ai-hello"><b>Подключите ИИ</b><p>На сайте ИИ работает через ваш ключ Anthropic API. Ключ хранится только на этом устройстве. Оплата идёт с вашего счёта Anthropic, обычно это центы за разговор.</p>
-  <div class="field" style="width:100%"><label for="ai-key-in">Ключ API (начинается с sk-ant-)</label><input class="input" id="ai-key-in" type="password" autocomplete="off" placeholder="sk-ant-…"></div>
-  <button class="btn primary block" data-aisavekey>Сохранить ключ</button>
-  <p class="small">Ключ можно получить на console.anthropic.com → API Keys. Или откройте версию «Подхода» на claude.ai: там ИИ работает через ваш аккаунт Claude без ключа.</p></div>`;
+  const p=aiProvider();
+  if(p==="gemini")return`<div class="ai-hello"><b>Подключите Gemini — бесплатно</b>
+    <p>1. Откройте <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">aistudio.google.com/apikey</a> и войдите своим аккаунтом Google.<br>2. Нажмите <b>Create API key</b> и скопируйте ключ.<br>3. Вставьте его сюда — один раз, он сохранится на этом устройстве.</p>
+    <div class="field" style="width:100%"><label for="ai-key-in">Ключ Gemini</label><input class="input" id="ai-key-in" type="password" autocomplete="off" placeholder="AIza…"></div>
+    <button class="btn primary block" data-aisavekey>Сохранить и начать</button>
+    <p class="small">Бесплатно, но с лимитом запросов в минуту и в день. Подписка Gemini (Google One) на этот лимит не влияет: Google не даёт другим приложениям пользоваться подпиской.</p></div>`;
+  return`<div class="ai-hello"><b>Подключите Claude</b><p>Нужен ключ Anthropic API: console.anthropic.com → API Keys. Оплата с вашего счёта Anthropic, обычно центы за разговор. Ключ хранится только на этом устройстве.</p>
+    <div class="field" style="width:100%"><label for="ai-key-in">Ключ Claude (sk-ant-…)</label><input class="input" id="ai-key-in" type="password" autocomplete="off" placeholder="sk-ant-…"></div>
+    <button class="btn primary block" data-aisavekey>Сохранить и начать</button>
+    <p class="small">Без ключа Claude работает в версии «Подхода» на claude.ai — через вашу подписку. Или выберите вверху бесплатный Gemini.</p></div>`;
 }
+function aiProvSelect(){return`<select class="ai-prov" data-aiprov aria-label="Какой ИИ">${aiProviders().map(([v,l])=>`<option value="${v}" ${v===aiProvider()?"selected":""}>${esc(l)}</option>`).join("")}</select>`}
 function aiDraw(){
   const sh=AI.sheet;if(!sh)return;
-  if(!aiMode()){sh.body.innerHTML=aiSetupHtml();$(".ai-foot",sh.el).hidden=true;return}
+  const sel=$("[data-aiprov]",sh.el);if(sel)sel.outerHTML=aiProvSelect();
+  if(!aiReady()){sh.body.innerHTML=aiSetupHtml();$(".ai-foot",sh.el).hidden=true;return}
   $(".ai-foot",sh.el).hidden=false;
   sh.body.innerHTML=aiMsgsHtml()+(AI.busy?`<div class="ai-m bot ai-wait" id="ai-live">Думаю…</div>`:"");
-  const sb=$(".sheet-b",sh.el);sb.scrollTop=sb.scrollHeight;
+  sh.body.scrollTop=sh.body.scrollHeight;
   aiRefreshButtons();
 }
 function aiRefreshButtons(){
-  const sh=AI.sheet;if(!sh)return;
-  const mic=$("[data-aimic]",sh.el),send=$("[data-aisend]",sh.el);
-  if(mic){mic.hidden=!aiCanVoice();mic.classList.toggle("on",AI.listening);mic.setAttribute("aria-pressed",String(AI.listening))}
-  if(send){send.textContent=AI.busy?"Стоп":"Отправить";send.classList.toggle("danger",AI.busy);send.classList.toggle("primary",!AI.busy)}
+  const sh=AI.sheet;
+  if(sh){const mic=$("[data-aimic]",sh.el),send=$("[data-aisend]",sh.el);
+    if(mic){mic.hidden=!aiCanVoice();mic.classList.toggle("on",AI.listening);mic.setAttribute("aria-pressed",String(AI.listening))}
+    if(send){send.textContent=AI.busy?"Стоп":"Отправить";send.classList.toggle("danger",AI.busy);send.classList.toggle("primary",!AI.busy)}}
+  const b=$("#ai-bubble");if(b){b.classList.toggle("busy",AI.busy);b.classList.toggle("unread",AI.unread)}
 }
-function openAI(opts={}){
-  if(AI.sheet){if(opts.listen)aiMicToggle();return}
-  const sh=openSheet({title:"ИИ-тренер",cls:"ai-sheet",left:'<button class="btn ghost sm" data-close>Закрыть</button>',right:'<button class="btn ghost sm" data-aiclear>Очистить</button>',body:""});
-  AI.sheet=sh;
-  const foot=document.createElement("div");foot.className="ai-foot";
-  foot.innerHTML=`<div class="wrap"><button class="ai-mic" data-aimic aria-label="Сказать голосом" aria-pressed="false"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 10a7 7 0 0 0 14 0M12 17v4"/></svg></button><textarea id="ai-in" rows="1" placeholder="Сообщение…" aria-label="Сообщение ИИ-тренеру"></textarea><button class="btn primary sm" data-aisend>Отправить</button></div>`;
-  sh.el.appendChild(foot);
-  const inp=$("#ai-in",foot);
-  const grow=()=>{inp.style.height="auto";inp.style.height=Math.min(140,inp.scrollHeight)+"px"};
+function aiRefreshAll(){aiRefreshButtons();if(AI.sheet)aiDraw()}
+function aiBuild(){
+  const el=document.createElement("div");el.className="ai-panel";el.setAttribute("role","dialog");el.setAttribute("aria-label","ИИ-тренер");
+  el.innerHTML=`<div class="ai-head"><span class="ai-head-ic">${AI_ICON}</span>${aiProvSelect()}<span class="grow"></span><button class="ai-hb" data-aiclear aria-label="Новый разговор" title="Новый разговор"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 3-6.7L3 8M3 3v5h5"/></svg></button><button class="ai-hb" data-aimin aria-label="Свернуть" title="Свернуть"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M6 9l6 6 6-6"/></svg></button><button class="ai-hb" data-aiclose aria-label="Закрыть" title="Закрыть"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg></button></div>
+  <div class="ai-body"></div>
+  <div class="ai-foot"><button class="ai-mic" data-aimic aria-label="Сказать голосом" aria-pressed="false"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 10a7 7 0 0 0 14 0M12 17v4"/></svg></button><textarea id="ai-in" rows="1" placeholder="Сообщение…" aria-label="Сообщение ИИ-тренеру"></textarea><button class="btn primary sm" data-aisend>Отправить</button></div>`;
+  document.body.appendChild(el);
+  AI.sheet={el,body:$(".ai-body",el)};
+  const inp=$("#ai-in",el);
+  const grow=()=>{inp.style.height="auto";inp.style.height=Math.min(120,inp.scrollHeight)+"px"};
   inp.addEventListener("input",grow);
   inp.addEventListener("keydown",ev=>{if(ev.key==="Enter"&&!ev.shiftKey&&!ev.isComposing){ev.preventDefault();aiSend()}});
-  sh.el.addEventListener("click",ev=>{
+  el.addEventListener("change",ev=>{if(ev.target.matches("[data-aiprov]")){lsSet(AI_PROV_LS,ev.target.value);aiDraw()}});
+  el.addEventListener("click",async ev=>{
     const t=ev.target.closest("button");if(!t)return;
-    if(t.hasAttribute("data-close")){aiMicStop();if(AI.ctl)AI.ctl.abort();AI.sheet=null;return}
+    if(t.hasAttribute("data-aimin")){aiMinimize();return}
+    if(t.hasAttribute("data-aiclose")){aiClose();return}
     if(t.hasAttribute("data-aisend")){if(AI.busy){AI.ctl&&AI.ctl.abort();return}aiSend();return}
     if(t.hasAttribute("data-aimic")){aiMicToggle();return}
     if(t.hasAttribute("data-aichip")){inp.value=t.textContent;grow();aiSend();return}
     if(t.hasAttribute("data-aiclear")){if(AI.busy)return;AI.turns=[];aiDraw();return}
-    if(t.hasAttribute("data-aisavekey")){const v=($("#ai-key-in",sh.el).value||"").trim();if(!/^sk-/.test(v)){toast("Ключ должен начинаться с sk-");return}try{localStorage.setItem(AI_KEY_LS,v)}catch(e){}toast("Ключ сохранён");aiDraw();return}
+    if(t.hasAttribute("data-aisavekey")){await aiSaveKey(aiProvider(),($("#ai-key-in",el).value||"").trim(),t);aiDraw();return}
   });
-  aiDraw();
-  if(opts.listen&&aiMode())aiMicToggle();
-  else if(aiMode())setTimeout(()=>inp.focus({preventScroll:true}),60);
+  const bub=document.createElement("button");bub.id="ai-bubble";bub.hidden=true;bub.setAttribute("aria-label","Открыть ИИ-тренера");bub.innerHTML=AI_ICON;
+  bub.addEventListener("click",ev=>{ev.stopPropagation();openAI()});
+  document.body.appendChild(bub);
 }
+async function aiSaveKey(p,v,btn){
+  if(p==="gemini"){
+    if(!/^AIza[\w-]{20,}$/.test(v)){toast("Ключ Gemini начинается с AIza…");return false}
+    if(btn){btn.disabled=true;btn.textContent="Проверяю ключ…"}
+    try{await aiGLoadModels(v);lsSet(AI_GKEY_LS,v);toast("Gemini подключён");return true}
+    catch(e){toast(e.message||"Ключ не подошёл");return false}
+    finally{if(btn){btn.disabled=false;btn.textContent="Сохранить и начать"}}
+  }
+  if(!/^sk-ant-/.test(v)){toast("Ключ Claude начинается с sk-ant-");return false}
+  lsSet(AI_KEY_LS,v);toast("Ключ сохранён");return true;
+}
+function openAI(opts={}){
+  if(!AI.sheet)aiBuild();
+  AI.state="open";AI.unread=false;AI.sheet.el.hidden=false;$("#ai-bubble").hidden=true;document.body.classList.add("ai-open");
+  aiDraw();
+  if(opts.listen&&aiReady())aiMicToggle();
+  else if(aiReady()&&matchMedia("(hover:hover)").matches)setTimeout(()=>$("#ai-in").focus({preventScroll:true}),60);
+}
+function aiMinimize(){if(!AI.sheet)return;aiMicStop();AI.state="min";AI.sheet.el.hidden=true;$("#ai-bubble").hidden=false;document.body.classList.remove("ai-open");aiRefreshButtons()}
+function aiClose(){if(!AI.sheet)return;aiMicStop();if(AI.ctl)AI.ctl.abort();AI.state="closed";AI.sheet.el.hidden=true;$("#ai-bubble").hidden=true;document.body.classList.remove("ai-open")}
 async function aiSend(){
   const sh=AI.sheet;if(!sh||AI.busy)return;
   const inp=$("#ai-in",sh.el);const text=inp.value.trim();if(!text)return;
   aiMicStop();inp.value="";inp.style.height="auto";
   AI.turns.push({role:"user",content:text});AI.busy=true;AI.done=[];AI.ctl=new AbortController();aiDraw();
-  const live=()=>$("#ai-live",sh.el);
-  const turns=AI.turns.filter(t=>!t.err||t.content).map(t=>({role:t.role,content:t.content})).filter(t=>t.content);
-  // the API needs alternating turns starting with the user's
-  const clean=[];for(const t of turns){if(clean.length&&clean[clean.length-1].role===t.role)clean[clean.length-1].content+="\n\n"+t.content;else clean.push({...t})}
+  const clean=[];for(const t of AI.turns.filter(t=>t.content).map(t=>({role:t.role,content:t.content}))){if(clean.length&&clean[clean.length-1].role===t.role)clean[clean.length-1].content+="\n\n"+t.content;else clean.push(t)}
   while(clean.length&&clean[0].role!=="user")clean.shift();
-  const reply={role:"assistant",content:"",done:null};
+  const p=aiProvider();
+  const reply={role:"assistant",content:"",done:null,by:p==="gemini"?aiGModel():p==="claude"?aiModel():"Claude"};
   try{
-    const fn=aiMode()==="claude"?aiViaClaude:aiViaApi;
-    reply.content=await fn(aiSystem(),clean.slice(-20),txt=>{const l=live();if(l){l.innerHTML=aiMd(txt);l.classList.remove("ai-wait")}},AI.ctl.signal);
+    const fn=p==="claude-sub"?aiViaClaude:p==="gemini"?aiViaGemini:aiViaApi;
+    reply.content=await fn(aiSystem(),clean.slice(-20),txt=>{const l=$("#ai-live");if(l){l.innerHTML=aiMd(txt);l.classList.remove("ai-wait")}},AI.ctl.signal);
     if(!reply.content)reply.content=AI.done.length?"Готово.":"…";
   }catch(e){
-    if(e&&e.code==="cancelled"){reply.content=reply.content||"";reply.err="Остановлено"}
+    if(e&&e.code==="cancelled")reply.err="Остановлено";
     else reply.err=(e&&e.message)||"Не получилось связаться с ИИ";
   }
   reply.done=AI.done.slice();AI.turns.push(reply);AI.busy=false;AI.ctl=null;
-  if(AI.sheet)aiDraw();else if(reply.done.length)toast(reply.done[reply.done.length-1]);
+  if(AI.state==="open")aiDraw();else{AI.unread=true;aiRefreshButtons();if(AI.state==="min")toast(reply.done.length?reply.done[reply.done.length-1]:"ИИ ответил — нажмите на кружок")}
 }
 
 /* ---------- voice ---------- */
@@ -247,23 +338,31 @@ function aiMicStop(send){ // send=true: the user tapped the mic to finish — se
 
 /* ---------- settings section & entry points ---------- */
 function aiSettingsHtml(){
-  if(AI.sample)return`<p class="small muted" style="margin:0">ИИ работает через ваш аккаунт Claude — ключ не нужен.</p>`;
-  const k=aiKey();
-  return`<p class="small muted" style="margin:0">ИИ-тренер работает через ваш ключ Anthropic API. Ключ хранится только на этом устройстве и не уходит в облако «Подхода».</p>
-  <div class="field"><label for="ai-key">Ключ API</label><input class="input" id="ai-key" type="password" autocomplete="off" placeholder="sk-ant-…" value="${esc(k)}"></div>
-  <div class="field"><label for="ai-model">Модель</label><select class="select" id="ai-model">${AI_MODELS.map(([v,l])=>`<option value="${v}" ${v===aiModel()?"selected":""}>${esc(l)}</option>`).join("")}</select></div>`;
+  const p=aiProvider();
+  return`<p class="small muted" style="margin:0">Ключи хранятся только на этом устройстве и не уходят в облако «Подхода».${AI.sample?" В этой версии Claude работает через вашу подписку — ключ не нужен.":""}</p>
+  <div class="field"><label for="ai-prov-set">Какой ИИ использовать</label><select class="select" id="ai-prov-set">${aiProviders().map(([v,l])=>`<option value="${v}" ${v===p?"selected":""}>${esc(l)}</option>`).join("")}</select></div>
+  <div class="field"><label for="ai-gkey">Ключ Gemini — бесплатно на aistudio.google.com/apikey</label><input class="input" id="ai-gkey" type="password" autocomplete="off" placeholder="AIza…" value="${esc(aiGKey())}"></div>
+  <div class="field"><label for="ai-gmodel">Модель Gemini</label><select class="select" id="ai-gmodel">${aiGList().map(m=>`<option ${m===aiGModel()?"selected":""}>${esc(m)}</option>`).join("")}</select></div>
+  <div class="field"><label for="ai-key">Ключ Claude (Anthropic API, платно)</label><input class="input" id="ai-key" type="password" autocomplete="off" placeholder="sk-ant-…" value="${esc(aiKey())}"></div>
+  <div class="field"><label for="ai-model">Модель Claude</label><select class="select" id="ai-model">${AI_MODELS.map(([v,l])=>`<option value="${v}" ${v===aiModel()?"selected":""}>${esc(l)}</option>`).join("")}</select></div>`;
 }
 function aiSettingsBind(el){
-  const k=$("#ai-key",el),m=$("#ai-model",el);
-  if(k)k.addEventListener("change",()=>{const v=k.value.trim();if(v&&!/^sk-/.test(v)){toast("Ключ должен начинаться с sk-");return}try{v?localStorage.setItem(AI_KEY_LS,v):localStorage.removeItem(AI_KEY_LS)}catch(e){}toast(v?"Ключ сохранён":"Ключ удалён")});
-  if(m)m.addEventListener("change",()=>{try{localStorage.setItem(AI_MODEL_LS,m.value)}catch(e){}toast("Сохранено")});
+  const pv=$("#ai-prov-set",el),gk=$("#ai-gkey",el),gm=$("#ai-gmodel",el),k=$("#ai-key",el),m=$("#ai-model",el);
+  const fillG=()=>{gm.innerHTML=aiGList().map(x=>`<option ${x===aiGModel()?"selected":""}>${esc(x)}</option>`).join("")};
+  pv.addEventListener("change",()=>{lsSet(AI_PROV_LS,pv.value);toast("Сохранено");if(AI.sheet)aiDraw()});
+  gk.addEventListener("change",async()=>{const v=gk.value.trim();if(!v){lsSet(AI_GKEY_LS,"");toast("Ключ удалён");return}if(await aiSaveKey("gemini",v))fillG()});
+  gm.addEventListener("change",()=>{lsSet(AI_GMODEL_LS,gm.value);toast("Сохранено")});
+  k.addEventListener("change",async()=>{const v=k.value.trim();if(!v){lsSet(AI_KEY_LS,"");toast("Ключ удалён");return}await aiSaveKey("claude",v)});
+  m.addEventListener("change",()=>{lsSet(AI_MODEL_LS,m.value);toast("Сохранено")});
+  if(aiGKey())aiGLoadModels(aiGKey()).then(fillG).catch(()=>{});
 }
 (function aiMount(){
   if(typeof COACH!=="undefined"&&COACH)return; // the coach's page has no assistant
   // the AI button sits in the tab bar, between «История» and «Упражнения»
   const h=document.querySelector('#tabs [data-tab="history"]');
   if(h){const b=document.createElement("button");b.className="ai-tab";b.dataset.act="ai";b.setAttribute("aria-label","ИИ-тренер");
-    b.innerHTML='<span class="ai-tab-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l1.8 4.7L18.5 9.5l-4.7 1.8L12 16l-1.8-4.7L5.5 9.5l4.7-1.8z"/><path d="M19 15l.8 2.2L22 18l-2.2.8L19 21l-.8-2.2L16 18l2.2-.8z"/></svg></span>ИИ';
+    b.innerHTML='<span class="ai-tab-ic">'+AI_ICON+'</span>ИИ';
     h.after(b);h.parentNode.classList.add("ai5")}
-  document.addEventListener("click",ev=>{const t=ev.target.closest('[data-act="ai"],[data-act="ai-voice"]');if(!t)return;ev.stopPropagation();openAI({listen:t.dataset.act==="ai-voice"})},true);
+  document.addEventListener("click",ev=>{const t=ev.target.closest('[data-act="ai"],[data-act="ai-voice"]');if(!t)return;ev.stopPropagation();
+    if(t.dataset.act==="ai"&&AI.state==="open"){aiMinimize();return}openAI({listen:t.dataset.act==="ai-voice"})},true);
 })();
