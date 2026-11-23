@@ -98,6 +98,7 @@ h2{font:700 22px/1.1 var(--f-display);text-transform:uppercase;letter-spacing:.0
 .weekline .today{color:var(--fg);font-weight:700}
 
 .routine h3{font:700 20px/1.1 var(--f-display);text-transform:uppercase;letter-spacing:.01em}
+.coachplan{border-color:var(--accent)}
 .routine p{margin:6px 0 12px;color:var(--muted);font-size:14px}
 
 .empty{border:1.5px dashed var(--line);border-radius:var(--r);padding:22px 18px;text-align:center;display:flex;flex-direction:column;gap:10px;align-items:center}
@@ -227,6 +228,10 @@ textarea.input{height:auto;min-height:120px;padding:10px 12px;font:13px/1.4 ui-m
 .stepper button{width:34px;height:34px;font-weight:700;font-size:18px;background:var(--surface-2)}
 .stepper span{min-width:34px;text-align:center;font-weight:700;font-variant-numeric:tabular-nums}
 .ritem{display:flex;flex-direction:column;gap:10px}
+.tgt{display:flex;gap:14px;flex-wrap:wrap}
+.tgt label{display:flex;align-items:center;gap:6px;font-size:13px;color:var(--muted)}
+.tgt .cell{width:72px}
+.input.sm{height:38px;font-size:14px}
 .ritem .row{gap:8px}
 .mini{width:32px;height:32px;border-radius:8px;background:var(--surface-2);display:grid;place-items:center;color:var(--muted)}
 .mini svg{width:16px;height:16px}
@@ -341,20 +346,23 @@ const ICON={
 };
 
 /* ---------- state & storage: local cache + Supabase sync ---------- */
-const S={mode:"loading",workouts:[],routines:[],custom:[],active:null,settings:{rest:90},tab:"workout",exFilter:{q:"",m:""},progMetric:"count",note:"",sync:{status:"off",last:0,err:""}};
+const S={mode:"loading",workouts:[],routines:[],custom:[],active:null,settings:{rest:90},tab:"workout",exFilter:{q:"",m:""},progMetric:"count",note:"",coach:[],coachLink:undefined,coachErr:"",sync:{status:"off",last:0,err:""}};
 const LS_KEY="podhod:v1",LS_Q="podhod:queue",LS_SYNCED="podhod:synced-user",TABLE="podhod_docs";
 const COLL={workouts:"workouts",routines:"routines",custom:"exercises"};
 const KEY_BY_COLL={workouts:"workouts",routines:"routines",exercises:"custom"};
 let sb=null,session=null,queue=[];
+const COACH=new URLSearchParams(location.search).get("coach");
+const APP_VERSION="4";
+async function checkUpdate(){try{const r=await fetch("version.json?t="+Date.now(),{cache:"no-store"});if(!r.ok)return;const v=(await r.json()).v;const busy=document.activeElement&&document.activeElement.matches("input,textarea,select");if(v&&String(v)!==APP_VERSION&&!busy&&!document.querySelector(".sheet,.pop"))location.reload()}catch(e){}}
 function sortData(){S.workouts.sort((a,b)=>b.start-a.start);S.routines.sort((a,b)=>(a.created||0)-(b.created||0));S.custom.sort((a,b)=>a.name.localeCompare(b.name,"ru"))}
-function lsSave(){try{localStorage.setItem(LS_KEY,JSON.stringify({workouts:S.workouts,routines:S.routines,custom:S.custom,active:S.active,settings:S.settings}))}catch(e){}}
+function lsSave(){if(COACH)return;try{localStorage.setItem(LS_KEY,JSON.stringify({workouts:S.workouts,routines:S.routines,custom:S.custom,active:S.active,settings:S.settings,coach:S.coach}))}catch(e){}}
 function lsLoad(){let d=null;try{d=JSON.parse(localStorage.getItem(LS_KEY)||"null")}catch(e){}
-  if(d){S.workouts=d.workouts||[];S.routines=d.routines||[];S.custom=d.custom||[];S.active=d.active||null;S.settings={rest:90,...(d.settings||{})}}
+  if(d){S.workouts=d.workouts||[];S.routines=d.routines||[];S.custom=d.custom||[];S.active=d.active||null;S.settings={rest:90,...(d.settings||{})};S.coach=d.coach||[]}
   try{queue=JSON.parse(localStorage.getItem(LS_Q)||"[]")}catch(e){queue=[]}sortData()}
 function qSave(){try{localStorage.setItem(LS_Q,JSON.stringify(queue))}catch(e){}}
 const clone=o=>o==null?o:JSON.parse(JSON.stringify(o));
 function enqueue(op,coll,id,data){
-  if(!sb||!session)return;
+  if(COACH||!sb||!session)return;
   queue=queue.filter(q=>!(q.coll===coll&&q.id===id));queue.push({op,coll,id,data:clone(data)});qSave();flush();
 }
 async function put(key,obj){
@@ -420,7 +428,7 @@ async function pull(){
     if(!pend.has("state/active")){if(rActive!==undefined)S.active=rActive;else if(first&&S.active)queue.push({op:"put",coll:"state",id:"active",data:{w:clone(S.active)}});else S.active=null}
     if(!pend.has("state/settings")){if(rSettings)S.settings={rest:90,...rSettings};else if(first)queue.push({op:"put",coll:"state",id:"settings",data:clone(S.settings)})}
     qSave();sortData();lsSave();try{localStorage.setItem(LS_SYNCED,uid)}catch(e){}
-    S.sync.last=Date.now();S.sync.err="";pulling=false;setSync("ok");
+    S.sync.last=Date.now();S.sync.err="";pulling=false;setSync("ok");loadCoach();
     if(JSON.stringify(S.active)!==prevActive){if(S.active)wake(true);render()}else softRender();
     flush();
   }catch(e){pulling=false;S.sync.err=(e&&e.message)||String(e);setSync(navigator.onLine===false?"offline":"error")}
@@ -430,7 +438,7 @@ function setNote(){
     :!session?"Войдите в настройках (шестерёнка), чтобы тренировки сохранялись в облаке и были видны на всех устройствах.":"";
 }
 async function init(){
-  lsLoad();S.mode="ready";
+  if(!COACH)lsLoad();S.mode="ready";
   const cfg=window.PODHOD_CONFIG||{};
   if(cfg.url&&cfg.anonKey&&window.supabase&&window.supabase.createClient){
     try{
@@ -439,17 +447,65 @@ async function init(){
       sb.auth.onAuthStateChange((ev,s)=>{const was=session;session=s;setNote();if(s&&!was){pull()}if(!s)setSync("signedout");renderSync()});
     }catch(e){sb=null}
   }
-  setNote();if(S.active)wake(true);render();
+  if(COACH){startCoach();return}
+  setNote();if(S.active)wake(true);render();setTimeout(checkUpdate,2500);
   if(!sb)setSync("off");else if(!session)setSync("signedout");else pull();
   addEventListener("online",()=>{flush();pull()});
   addEventListener("offline",()=>{if(sb&&session)setSync("offline")});
-  document.addEventListener("visibilitychange",()=>{if(document.visibilityState==="visible"&&Date.now()-lastPull>30000)pull()});
+  document.addEventListener("visibilitychange",()=>{if(document.visibilityState!=="visible")return;checkUpdate();if(Date.now()-lastPull>30000)pull()});
   setInterval(flush,30000);
   if("serviceWorker" in navigator&&location.protocol==="https:")navigator.serviceWorker.register("./sw.js").catch(()=>{});
 }
+
+/* ---------- trainer link ---------- */
+const CO={state:"loading",client:"",plans:[],err:""};
+function planLine(it){const x=exInfo(it);let t=x.name+" "+(it.sets||"")+"×"+(it.r!=null?(x.type==="time"?it.r+"с":it.r):"…");if(it.w!=null)t+=" · "+fmtN(it.w)+" кг";return t}
+async function startCoach(){
+  render();
+  if(!sb){CO.state="error";CO.err="Облако не настроено (config.js).";render();return}
+  try{const info=await sb.rpc("podhod_coach_info",{p_token:COACH});if(info.error)throw info.error;
+    if(!info.data){CO.state="invalid";render();return}
+    CO.client=info.data.client||"";await coachReload();CO.state="ready"}
+  catch(e){CO.state=/uuid/i.test(String(e&&e.message))?"invalid":"error";CO.err=(e&&e.message)||String(e)}
+  render();
+}
+async function coachReload(){const r=await sb.rpc("podhod_coach_list",{p_token:COACH});if(r.error)throw r.error;CO.plans=(r.data||[]).map(x=>({...x.data,id:x.id})).sort((a,b)=>(a.created||0)-(b.created||0))}
+async function coachSave(d){
+  const r=await sb.rpc("podhod_coach_save",{p_token:COACH,p_id:d.id,p_data:JSON.parse(JSON.stringify({...d,updated:Date.now()}))});
+  if(r.error){toast("Не сохранилось: "+r.error.message);return}
+  try{await coachReload()}catch(e){}toast("План сохранён — клиент увидит его в приложении");render();
+}
+async function coachDelete(d){const r=await sb.rpc("podhod_coach_delete",{p_token:COACH,p_id:d.id});if(r.error){toast("Не удалилось: "+r.error.message);return}try{await coachReload()}catch(e){}render()}
+function viewCoach(){
+  if(CO.state==="loading")return'<div class="loading">Открываю кабинет тренера…</div>';
+  if(CO.state==="invalid")return'<h1 class="display">Ссылка не работает</h1><div class="empty"><b>Ссылка недействительна</b><p>Возможно, клиент её отозвал. Попросите у него новую ссылку.</p></div>';
+  if(CO.state==="error")return`<h1 class="display">Ошибка</h1><div class="banner">${esc(CO.err)}</div>`;
+  return`<div><div class="eyebrow">Кабинет тренера</div><h1 class="display">${CO.client?esc(CO.client):"Планы клиента"}</h1><p class="small muted" style="margin:6px 0 0">Составляйте планы: упражнения, подходы, вес, повторения, отдых и заметки. Клиент увидит их в приложении в разделе «От тренера» и запустит одним нажатием.</p></div>
+  <button class="btn primary big" data-act="coach-new">+ Новый план</button>
+  <section class="list">${CO.plans.length?CO.plans.map(p=>`<article class="card routine"><h3>${esc(p.name)}</h3>${p.note?`<div class="small muted">${esc(p.note)}</div>`:""}<p>${esc(p.items.map(planLine).join(" · "))}</p><div class="row"><button class="btn grow" data-act="coach-edit" data-id="${esc(p.id)}">Изменить</button></div></article>`).join(""):'<div class="empty"><b>Планов пока нет</b><p>Нажмите «Новый план», добавьте упражнения, укажите подходы, вес и повторения и сохраните.</p></div>'}</section>`;
+}
+async function loadCoach(){
+  if(!sb||!session||COACH)return;
+  try{
+    const[l,p]=await Promise.all([sb.from("podhod_coach_links").select("token,client_name").limit(1),sb.from("podhod_coach_plans").select("id,data")]);
+    if(l.error){S.coachErr=l.error.message}else{S.coachErr="";S.coachLink=l.data[0]||null}
+    if(!p.error){S.coach=p.data.map(r=>({...r.data,id:r.id})).sort((a,b)=>(a.created||0)-(b.created||0));lsSave()}
+    softRender();const cb=$("#coach-box");if(cb)cb.innerHTML=coachBoxHtml();
+  }catch(e){}
+}
+function coachLinkUrl(){return location.origin+location.pathname+"?coach="+S.coachLink.token}
+function coachBoxHtml(){
+  if(!sb||!session)return'<div class="small muted">Войдите в аккаунт, чтобы дать тренеру ссылку. По ней тренер сможет составлять для вас планы тренировок.</div>';
+  if(S.coachErr)return`<div class="banner">Нужно обновить базу: выполните заново файл supabase-setup.sql в Supabase (SQL Editor → Run). Ошибка: ${esc(S.coachErr)}</div>`;
+  if(S.coachLink===undefined)return'<div class="small muted">Загружаю…</div>';
+  if(!S.coachLink)return`<div class="small muted">Тренер откроет ссылку без регистрации и сможет создавать и менять планы для вас. Ваши тренировки и история ему не видны.</div><div class="field"><label for="coach-client">Как тренер увидит вас (имя)</label><input class="input" id="coach-client" maxlength="60" placeholder="Например, Алексей"></div><button class="btn primary block" data-coach-create>Создать ссылку для тренера</button>`;
+  return`<div class="small muted">Отправьте эту ссылку тренеру. Его планы появятся у вас на главном экране в разделе «От тренера».</div><input class="input" id="coach-url" readonly value="${esc(coachLinkUrl())}" aria-label="Ссылка для тренера"><div class="row"><button class="btn primary grow" data-coach-copy>Копировать</button>${navigator.share?'<button class="btn grow" data-coach-share>Отправить</button>':""}</div><button class="btn danger block" data-coach-revoke>Отозвать ссылку</button>`;
+}
+
 /* ---------- exercise lookup & stats ---------- */
-function allExercises(){return[...BUILTIN,...S.custom.map(c=>({...c,builtin:false}))]}
-function exById(id){return BUILTIN_MAP.get(id)||S.custom.find(c=>c.id===id)||null}
+function allExercises(){const ov=new Map(S.custom.filter(c=>c.id.startsWith("b:")).map(c=>[c.id,c]));return[...BUILTIN.map(b=>ov.has(b.id)?{...b,name:ov.get(b.id).name,renamed:true}:b),...S.custom.filter(c=>!c.id.startsWith("b:")).map(c=>({...c,builtin:false}))]}
+function exById(id){const b=BUILTIN_MAP.get(id);if(b){const o=S.custom.find(c=>c.id===id);return o?{...b,name:o.name,renamed:true}:b}return S.custom.find(c=>c.id===id)||null}
+function nm(e){const x=exById(e.exId);return x?x.name:(e.name||"Упражнение")}
 function exInfo(e){const x=exById(e.exId);return x?{...x}:{id:e.exId,name:e.name||"Упражнение",muscle:e.muscle||"",equip:"",type:e.type||"wr"}}
 function useCount(){const m=new Map();for(const w of S.workouts)for(const e of w.exercises)m.set(e.exId,(m.get(e.exId)||0)+1);return m}
 function workSets(e){return e.sets.filter(s=>s.t!=="w")}
@@ -469,9 +525,9 @@ function records(w){ // PRs in workout w vs earlier workouts
     const type=e.type||"wr";const cur=bestOf(e.sets,type);let prev={w:0,e:0,r:0,s:0},had=false;
     for(const o of S.workouts){if(o.id===w.id||o.start>=w.start)continue;const oe=o.exercises.find(x=>x.exId===e.exId);if(!oe)continue;had=true;const b=bestOf(oe.sets,type);prev={w:Math.max(prev.w,b.w),e:Math.max(prev.e,b.e),r:Math.max(prev.r,b.r),s:Math.max(prev.s,b.s)}}
     if(!had)continue;
-    if(type==="wr"){if(cur.w>prev.w)out.push({name:e.name,what:"Вес "+fmtKg(cur.w)});else if(cur.e>prev.e+0.01)out.push({name:e.name,what:"Расч. 1ПМ "+fmtKg(Math.round(cur.e))})}
-    else if(type==="bw"&&cur.r>prev.r)out.push({name:e.name,what:cur.r+" повт."});
-    else if(type==="time"&&cur.s>prev.s)out.push({name:e.name,what:clock(cur.s)});
+    if(type==="wr"){if(cur.w>prev.w)out.push({name:nm(e),what:"Вес "+fmtKg(cur.w)});else if(cur.e>prev.e+0.01)out.push({name:nm(e),what:"Расч. 1ПМ "+fmtKg(Math.round(cur.e))})}
+    else if(type==="bw"&&cur.r>prev.r)out.push({name:nm(e),what:cur.r+" повт."});
+    else if(type==="time"&&cur.s>prev.s)out.push({name:nm(e),what:clock(cur.s)});
   }
   return out;
 }
@@ -521,6 +577,7 @@ function restAdj(d){if(!rest)return;rest.end+=d*1000;rest.total=Math.max(1,rest.
 function render(){
   document.querySelectorAll("#tabs [data-tab]").forEach(b=>{if(b.dataset.tab===S.tab)b.setAttribute("aria-current","page");else b.removeAttribute("aria-current")});
   const m=$("#main .wrap");
+  if(COACH){$("#tabs").hidden=true;const g=document.querySelector('[data-act="settings"]');if(g)g.hidden=true;$(".brand span:last-child").textContent="Подход · тренер";m.innerHTML=viewCoach();$("#float").innerHTML="";return}
   if(S.mode==="loading"){m.innerHTML='<div class="loading">Загружаю журнал…</div>';return}
   const note=S.note?`<div class="banner">${esc(S.note)}</div>`:"";
   if(S.tab==="workout")m.innerHTML=S.active?viewActive():note+viewStart();
@@ -555,13 +612,15 @@ function viewStart(){
   const thisWeek=S.workouts.filter(w=>w.start>=ws);
   const days=["Пн","Вт","Ср","Чт","Пт","Сб","Вс"].map((d,i)=>{const t=ws+i*864e5;const on=S.workouts.some(w=>dayStart(w.start)===dayStart(t));return`<div class="${on?"on":""} ${dayStart(t)===today?"today":""}"><i></i>${d}</div>`}).join("");
   const vol=thisWeek.reduce((a,w)=>a+wVolume(w),0);
-  const routines=S.routines.length?S.routines.map(r=>`<article class="card routine"><h3>${esc(r.name)}</h3><p>${esc(r.items.map(it=>exInfo(it).name).join(" · "))}</p><div class="row"><button class="btn primary grow" data-act="start-routine" data-id="${esc(r.id)}">Начать</button><button class="btn" data-act="edit-routine" data-id="${esc(r.id)}">Изменить</button></div></article>`).join("")
+  const routines=S.routines.length?S.routines.map(r=>`<article class="card routine"><h3>${esc(r.name)}</h3>${r.note?`<div class="small muted">${esc(r.note)}</div>`:""}<p>${esc(r.items.map(it=>exInfo(it).name).join(" · "))}</p><div class="row"><button class="btn primary grow" data-act="start-routine" data-id="${esc(r.id)}">Начать</button><button class="btn" data-act="edit-routine" data-id="${esc(r.id)}">Изменить</button></div></article>`).join("")
    :`<div class="empty"><b>Программ пока нет</b><p>Программа — это шаблон тренировки: список упражнений, число подходов и отдых. Запускается одним нажатием.</p><div class="row" style="justify-content:center"><button class="btn primary" data-act="new-routine">Создать программу</button><button class="btn" data-act="sample-routines">Добавить 3 примера</button></div></div>`;
+  const coachSec=S.coach.length?`<section class="list"><div class="sec-head"><h2>От тренера</h2></div>${S.coach.map(r=>`<article class="card routine coachplan"><h3>${esc(r.name)}</h3>${r.note?`<div class="small muted">${esc(r.note)}</div>`:""}<p>${esc(r.items.map(planLine).join(" · "))}</p><div class="row"><button class="btn primary grow" data-act="start-coach" data-id="${esc(r.id)}">Начать</button><button class="btn" data-act="copy-coach" data-id="${esc(r.id)}">В мои программы</button></div></article>`).join("")}</section>`:"";
   return`<section class="start">
     <div><div class="eyebrow">Эта неделя</div><h1 class="display">${thisWeek.length} ${plural(thisWeek.length,"тренировка","тренировки","тренировок")}</h1>${vol?`<div class="muted num">Объём ${fmtKg(vol)}</div>`:""}</div>
     <div class="weekline">${days}</div>
     <button class="btn primary big" data-act="start-empty">Начать пустую тренировку</button>
   </section>
+  ${coachSec}
   <section class="list"><div class="sec-head"><h2>Программы</h2>${S.routines.length?'<button class="btn ghost sm" data-act="new-routine">+ Новая</button>':""}</div>${routines}</section>`;
 }
 
@@ -592,7 +651,7 @@ function exCard(e,i){
   }).join("");
   const head=type==="time"?'<th>Подход</th><th>Прошлый</th><th colspan="2">Секунды</th><th></th>':`<th>Подход</th><th>Прошлый</th><th>${type==="bw"?"+кг":"кг"}</th><th>Повт.</th><th></th>`;
   return`<article class="ex" data-ex="${i}">
-    <div class="ex-h"><button class="t" data-act="ex-info" data-id="${esc(e.exId)}"><b>${esc(e.name)}</b><span>${esc(e.muscle||"")}</span></button><button class="iconbtn" data-act="ex-menu" data-i="${i}" aria-label="Действия с упражнением">${ICON.dots}</button></div>
+    <div class="ex-h"><button class="t" data-act="ex-info" data-id="${esc(e.exId)}"><b>${esc(nm(e))}</b><span>${esc(e.muscle||"")}</span></button><button class="iconbtn" data-act="ex-menu" data-i="${i}" aria-label="Действия с упражнением">${ICON.dots}</button></div>
     ${e.note!=null?`<textarea class="ex-note" data-note="${i}" rows="1" placeholder="Заметка: настройки тренажёра, ощущения…">${esc(e.note)}</textarea>`:""}
     <button class="chip-btn" data-act="ex-rest" data-i="${i}">${ICON.timer} Отдых: ${e.rest?fmtRest(e.rest):"выкл."}</button>
     <table class="sets"><thead><tr>${head}</tr></thead><tbody>${rows}</tbody></table>
@@ -602,14 +661,21 @@ function exCard(e,i){
 function newActive(name,exercises,routineId){
   S.active={id:newId(),name,start:Date.now(),routineId:routineId||null,exercises};saveActive(true);wake(true);S.tab="workout";render();scrollTo(0,0);
 }
-function exEntry(exId,setsN,restSec){const x=exById(exId)||{id:exId,name:"Упражнение",muscle:"",type:"wr"};const p=prevSets(exId);const n=setsN||(p?p.length:3);return{exId,name:x.name,muscle:x.muscle,type:x.type,rest:restSec??S.settings.rest,note:null,sets:Array.from({length:n},(_,j)=>({t:p&&p[j]&&p[j].t==="w"?"w":"n",w:null,r:null,s:null,done:false}))}}
+function exEntry(exId,setsN,restSec,info){
+  const x=exById(exId)||(info&&info.name?{id:exId,name:info.name,muscle:info.muscle||"",type:info.type||"wr"}:{id:exId,name:"Упражнение",muscle:"",type:"wr"});
+  const p=prevSets(exId);const n=setsN||(p?p.length:3);
+  const tw=info&&info.w!=null?info.w:null,tr=info&&info.r!=null?info.r:null,plan=tw!=null||tr!=null;
+  return{exId,name:x.name,muscle:x.muscle,type:x.type,rest:restSec??S.settings.rest,note:info&&info.note?info.note:null,sets:Array.from({length:n},(_,j)=>{
+    const s={t:!plan&&p&&p[j]&&p[j].t==="w"?"w":"n",w:null,r:null,s:null,done:false};
+    if(plan){s.auto={};if(tw!=null){s.w=tw;s.auto.w=true}if(tr!=null){if(x.type==="time")s.s=tr;else{s.r=tr;s.auto.r=true}}}
+    return s})}}
 function defaultName(){const h=new Date().getHours();return h<12?"Утренняя тренировка":h<17?"Дневная тренировка":"Вечерняя тренировка"}
 function rerenderActive(){const y=scrollY;render();scrollTo(0,y)}
 function updateActiveStats(){const st=activeStats();const v=$("[data-avol]");if(v)v.textContent=fmtN(st.vol);const s=$("[data-asets]");if(s)s.textContent=st.sets}
 
 async function finishWorkout(){
   const a=S.active;
-  const exercises=a.exercises.map(e=>({exId:e.exId,name:e.name,muscle:e.muscle,type:e.type,note:e.note||"",sets:e.sets.filter(s=>s.done).map(s=>({t:s.t||"n",w:s.w??null,r:s.r??null,s:s.s??null}))})).filter(e=>e.sets.length);
+  const exercises=a.exercises.map(e=>({exId:e.exId,name:nm(e),muscle:e.muscle,type:e.type,note:e.note||"",sets:e.sets.filter(s=>s.done).map(s=>({t:s.t||"n",w:s.w??null,r:s.r??null,s:s.s??null}))})).filter(e=>e.sets.length);
   if(!exercises.length){if(await confirmBox("Нет выполненных подходов","Отметьте галочкой хотя бы один подход или отмените тренировку.","Отменить тренировку"))discardWorkout(true);return}
   const w={id:a.id,name:(a.name||"").trim()||defaultName(),start:a.start,end:Date.now(),routineId:a.routineId||null,exercises};
   const prs=records(w);const skipped=a.exercises.reduce((n,e)=>n+e.sets.filter(s=>!s.done).length,0);
@@ -643,7 +709,7 @@ function openPicker(onPick,multi=true){
     const ql=q.trim().toLowerCase();
     let list=allExercises().filter(e=>(!m||e.muscle===m)&&(!ql||e.name.toLowerCase().includes(ql)));
     list.sort((a,b)=>(counts.get(b.id)||0)-(counts.get(a.id)||0)||a.name.localeCompare(b.name,"ru"));
-    $("#pick-list",sh.el).innerHTML=list.length?list.map(e=>`<button class="exrow ${sel.includes(e.id)?"sel":""}" data-id="${esc(e.id)}"><span class="ava">${sel.includes(e.id)?sel.indexOf(e.id)+1:esc(e.name[0])}</span><span class="t"><b>${esc(e.name)}</b><span>${esc(e.muscle)} · ${esc(e.equip)}${counts.get(e.id)?` · ${counts.get(e.id)} раз`:""}</span></span>${e.builtin?"":'<span class="tag">своё</span>'}</button>`).join(""):'<p class="muted">Ничего не нашлось. Создайте своё упражнение.</p>';
+    $("#pick-list",sh.el).innerHTML=list.length?list.map(e=>`<button class="exrow ${sel.includes(e.id)?"sel":""}" data-id="${esc(e.id)}"><span class="ava">${sel.includes(e.id)?sel.indexOf(e.id)+1:esc(e.name[0])}</span><span class="t"><b>${esc(nm(e))}</b><span>${esc(e.muscle)} · ${esc(e.equip)}${counts.get(e.id)?` · ${counts.get(e.id)} раз`:""}</span></span>${e.builtin?"":'<span class="tag">своё</span>'}</button>`).join(""):'<p class="muted">Ничего не нашлось. Создайте своё упражнение.</p>';
     const pb=$("[data-pick]",sh.el);pb.disabled=!sel.length;pb.textContent=sel.length?`Добавить (${sel.length})`:"Добавить";
   };
   drawChips();draw();
@@ -670,29 +736,50 @@ function openExerciseForm(existing,after){
   };
 }
 
+function renameExercise(id){
+  const x=exById(id);if(!x)return;
+  pop(`<h3>Название упражнения</h3><input class="input" id="ren-name" value="${esc(x.name)}" maxlength="80" aria-label="Новое название">${x.builtin?`<p class="small">Стандартное название: ${esc(BUILTIN_MAP.get(id).name)}</p>`:""}<button class="btn primary block" data-ok>Сохранить</button><button class="btn block" data-close>Отмена</button>`,(el,close)=>{
+    const inp=$("#ren-name",el);setTimeout(()=>{inp.focus();inp.select()},50);
+    const save=async()=>{const name=inp.value.trim();if(!name){toast("Введите название");return}close();
+      if(x.builtin){if(name===BUILTIN_MAP.get(id).name)await del("custom",id);else await put("custom",{id,name,override:true})}
+      else await put("custom",{...S.custom.find(c=>c.id===id),name});
+      if(S.active){for(const e of S.active.exercises)if(e.exId===id)e.name=name;saveActive()}
+      toast("Название сохранено");if(S.active&&S.tab==="workout")rerenderActive();else render()};
+    $("[data-ok]",el).onclick=save;inp.addEventListener("keydown",ev=>{if(ev.key==="Enter")save()});
+  });
+}
+
 /* ---------- routine editor ---------- */
-function openRoutine(r){
-  const d=r?JSON.parse(JSON.stringify(r)):{id:newId(),name:"",created:Date.now(),items:[]};
-  const sh=openSheet({title:r?"Программа":"Новая программа",left:'<button class="btn ghost sm" data-close>Отмена</button>',right:'<button class="btn primary sm" data-save>Сохранить</button>',body:""});
+function openRoutine(r,opts={}){
+  const d=r?JSON.parse(JSON.stringify(r)):{id:newId(),name:"",note:"",created:Date.now(),items:[]};
+  const sh=openSheet({title:opts.title||(r?"Программа":"Новая программа"),left:'<button class="btn ghost sm" data-close>Отмена</button>',right:'<button class="btn primary sm" data-save>Сохранить</button>',body:""});
   const draw=()=>{
     sh.body.innerHTML=`<div class="field"><label for="r-name">Название</label><input class="input" id="r-name" value="${esc(d.name)}" placeholder="Например, Верх тела А"></div>
+    <div class="field"><label for="r-note">Описание (необязательно)</label><input class="input" id="r-note" value="${esc(d.note||"")}" placeholder="Например, неделя 1, лёгкая нагрузка"></div>
     <div class="list">${d.items.map((it,k)=>{const x=exInfo(it);return`<div class="card ritem"><div class="row"><div class="grow"><b>${esc(x.name)}</b><div class="small muted">${esc(x.muscle)}</div></div><button class="mini" data-mv="-1" data-k="${k}" ${k===0?"disabled":""} aria-label="Выше">${ICON.up}</button><button class="mini" data-mv="1" data-k="${k}" ${k===d.items.length-1?"disabled":""} aria-label="Ниже">${ICON.down}</button><button class="mini" data-rm="${k}" aria-label="Убрать">${ICON.x}</button></div>
       <div class="row between"><div class="row small"><span class="muted">Подходы</span><span class="stepper"><button data-st="-1" data-k="${k}" aria-label="Меньше">−</button><span>${it.sets}</span><button data-st="1" data-k="${k}" aria-label="Больше">+</button></span></div>
-      <div class="row small"><span class="muted">Отдых</span><select class="select" style="height:34px;width:auto;font-size:14px" data-rest="${k}">${restOptions(it.rest)}</select></div></div></div>`}).join("")}</div>
+      <div class="row small"><span class="muted">Отдых</span><select class="select" style="height:34px;width:auto;font-size:14px" data-rest="${k}">${restOptions(it.rest)}</select></div></div>
+      <div class="tgt">${x.type==="wr"?`<label>Вес, кг <input class="cell" inputmode="decimal" data-tw="${k}" value="${it.w!=null?fmtN(it.w).replace(/\s/g,""):""}" placeholder="—"></label>`:""}<label>${x.type==="time"?"Секунды":"Повторения"} <input class="cell" inputmode="numeric" data-tr="${k}" value="${it.r??""}" placeholder="—"></label></div>
+      <input class="input sm" data-tn="${k}" value="${esc(it.note||"")}" placeholder="Заметка: техника, темп, на что обратить внимание">
+      </div>`}).join("")}</div>
     <button class="btn block" data-add>+ Добавить упражнения</button>
-    ${r?'<button class="btn danger block" data-delr>Удалить программу</button>':""}`;
+    ${r&&!opts.noDelete?'<button class="btn danger block" data-delr>Удалить</button>':""}`;
   };
   draw();
-  sh.el.addEventListener("input",ev=>{if(ev.target.id==="r-name")d.name=ev.target.value});
+  sh.el.addEventListener("input",ev=>{const t=ev.target;
+    if(t.id==="r-name")d.name=t.value;else if(t.id==="r-note")d.note=t.value;
+    else if(t.dataset.tw!=null)d.items[+t.dataset.tw].w=num(t.value);
+    else if(t.dataset.tr!=null){const v=num(t.value);d.items[+t.dataset.tr].r=v==null?null:Math.round(v)}
+    else if(t.dataset.tn!=null)d.items[+t.dataset.tn].note=t.value});
   sh.el.addEventListener("change",ev=>{if(ev.target.dataset.rest!=null)d.items[+ev.target.dataset.rest].rest=+ev.target.value});
   sh.el.addEventListener("click",async ev=>{
     const t=ev.target.closest("button");if(!t)return;
     if(t.dataset.mv){const k=+t.dataset.k,j=k+ +t.dataset.mv;[d.items[k],d.items[j]]=[d.items[j],d.items[k]];draw()}
     else if(t.dataset.rm!=null){d.items.splice(+t.dataset.rm,1);draw()}
     else if(t.dataset.st){const it=d.items[+t.dataset.k];it.sets=Math.max(1,Math.min(20,it.sets+ +t.dataset.st));draw()}
-    else if(t.hasAttribute("data-add"))openPicker(ids=>{for(const id of ids)d.items.push({exId:id,sets:3,rest:S.settings.rest});draw()});
-    else if(t.hasAttribute("data-delr")){if(await confirmBox("Удалить программу?","История тренировок останется.","Удалить")){sh.close();await del("routines",d.id);render()}}
-    else if(t.hasAttribute("data-save")){d.name=d.name.trim();if(!d.name){toast("Введите название программы");return}if(!d.items.length){toast("Добавьте хотя бы одно упражнение");return}sh.close();await put("routines",d);toast("Программа сохранена");render()}
+    else if(t.hasAttribute("data-add"))openPicker(ids=>{for(const id of ids){const x=exById(id)||{};d.items.push({exId:id,name:x.name,muscle:x.muscle,type:x.type,sets:3,rest:S.settings.rest,w:null,r:null,note:""})}draw()});
+    else if(t.hasAttribute("data-delr")){if(await confirmBox("Удалить?","История тренировок останется.","Удалить")){sh.close();if(opts.onDelete)await opts.onDelete(d);else await del("routines",d.id);render()}}
+    else if(t.hasAttribute("data-save")){d.name=d.name.trim();if(!d.name){toast("Введите название");return}if(!d.items.length){toast("Добавьте хотя бы одно упражнение");return}sh.close();if(opts.onSave)await opts.onSave(d);else{await put("routines",d);toast("Программа сохранена")}render()}
   });
 }
 function restOptions(cur){const opts=[0,30,45,60,75,90,120,150,180,240,300];if(!opts.includes(cur))opts.push(cur);return opts.sort((a,b)=>a-b).map(s=>`<option value="${s}" ${s===cur?"selected":""}>${s?fmtRest(s):"Выкл."}</option>`).join("")}
@@ -707,7 +794,7 @@ function viewHistory(){
     const prs=records(w).length;
     out+=`<button class="card hist" style="text-align:left;width:100%" data-act="open-workout" data-id="${esc(w.id)}"><div class="row between"><h3>${esc(w.name)}</h3>${prs?`<span class="tag pr">${prs} ${plural(prs,"рекорд","рекорда","рекордов")}</span>`:""}</div>
       <div class="meta"><span>${esc(fmtDate(w.start))}</span><span><b>${fmtDur((w.end-w.start)/1000)}</b></span><span><b>${fmtN(wVolume(w))}</b> кг</span><span><b>${wSets(w)}</b> подх.</span></div>
-      <ul>${w.exercises.slice(0,5).map(e=>`<li><span class="n">${e.sets.length}×</span><span>${esc(e.name)}</span></li>`).join("")}${w.exercises.length>5?`<li class="muted">ещё ${w.exercises.length-5}</li>`:""}</ul></button>`;
+      <ul>${w.exercises.slice(0,5).map(e=>`<li><span class="n">${e.sets.length}×</span><span>${esc(nm(e))}</span></li>`).join("")}${w.exercises.length>5?`<li class="muted">ещё ${w.exercises.length-5}</li>`:""}</ul></button>`;
   }
   return out;
 }
@@ -717,7 +804,7 @@ function openWorkout(id){
   const sh=openSheet({title:w.name,body:`<div><div class="eyebrow">${esc(fmtDate(w.start))} · ${new Date(w.start).toLocaleTimeString("ru-RU",{hour:"2-digit",minute:"2-digit"})}</div></div>
     <div class="tiles"><div class="tile"><b>${fmtDur((w.end-w.start)/1000)}</b><span>время</span></div><div class="tile"><b>${fmtN(wVolume(w))}</b><span>объём, кг</span></div></div>
     ${prs.length?`<div class="pr-list">${prs.map(p=>`<div><span class="tag pr">Рекорд</span><span>${esc(p.name)}: <b>${esc(p.what)}</b></span></div>`).join("")}</div>`:""}
-    ${w.exercises.map(e=>{let n=0;return`<div class="card"><button style="text-align:left" data-act="ex-info" data-id="${esc(e.exId)}"><b style="font:700 18px/1.2 var(--f-display);text-transform:uppercase;color:var(--accent)">${esc(e.name)}</b></button>${e.note?`<p class="small muted" style="margin:4px 0">${esc(e.note)}</p>`:""}<table class="detail">${e.sets.map(s=>{const l=s.t==="w"?"Р":s.t==="d"?"Д":s.t==="f"?"О":++n;return`<tr><td><span class="setlbl t-${s.t||"n"}" style="display:inline-grid;place-items:center;width:26px;height:26px;font-size:14px">${l}</span></td><td>${esc(setText(s,e.type||"wr"))}</td><td class="muted small" style="text-align:right">${(e.type||"wr")==="wr"&&s.w&&s.r?"1ПМ ≈ "+fmtN(Math.round(e1rm(s.w,s.r))):""}</td></tr>`}).join("")}</table></div>`}).join("")}
+    ${w.exercises.map(e=>{let n=0;return`<div class="card"><button style="text-align:left" data-act="ex-info" data-id="${esc(e.exId)}"><b style="font:700 18px/1.2 var(--f-display);text-transform:uppercase;color:var(--accent)">${esc(nm(e))}</b></button>${e.note?`<p class="small muted" style="margin:4px 0">${esc(e.note)}</p>`:""}<table class="detail">${e.sets.map(s=>{const l=s.t==="w"?"Р":s.t==="d"?"Д":s.t==="f"?"О":++n;return`<tr><td><span class="setlbl t-${s.t||"n"}" style="display:inline-grid;place-items:center;width:26px;height:26px;font-size:14px">${l}</span></td><td>${esc(setText(s,e.type||"wr"))}</td><td class="muted small" style="text-align:right">${(e.type||"wr")==="wr"&&s.w&&s.r?"1ПМ ≈ "+fmtN(Math.round(e1rm(s.w,s.r))):""}</td></tr>`}).join("")}</table></div>`}).join("")}
     <button class="btn primary block" data-repeat>Повторить тренировку</button>
     <button class="btn block" data-asroutine>Сохранить как программу</button>
     <button class="btn danger block" data-delw>Удалить тренировку</button>`});
@@ -738,7 +825,7 @@ function viewExercises(){
 function exListHtml(){
   const counts=useCount(),ql=S.exFilter.q.trim().toLowerCase();
   const list=allExercises().filter(e=>(!S.exFilter.m||e.muscle===S.exFilter.m)&&(!ql||e.name.toLowerCase().includes(ql))).sort((a,b)=>(counts.get(b.id)||0)-(counts.get(a.id)||0)||a.name.localeCompare(b.name,"ru"));
-  return list.length?list.map(e=>`<button class="exrow" data-act="ex-info" data-id="${esc(e.id)}"><span class="ava">${esc(e.name[0])}</span><span class="t"><b>${esc(e.name)}</b><span>${esc(e.muscle)} · ${esc(e.equip)}${counts.get(e.id)?` · ${counts.get(e.id)} ${plural(counts.get(e.id),"тренировка","тренировки","тренировок")}`:""}</span></span>${e.builtin?"":'<span class="tag">своё</span>'}</button>`).join(""):'<p class="muted">Ничего не нашлось.</p>';
+  return list.length?list.map(e=>`<button class="exrow" data-act="ex-info" data-id="${esc(e.id)}"><span class="ava">${esc(e.name[0])}</span><span class="t"><b>${esc(nm(e))}</b><span>${esc(e.muscle)} · ${esc(e.equip)}${counts.get(e.id)?` · ${counts.get(e.id)} ${plural(counts.get(e.id),"тренировка","тренировки","тренировок")}`:""}</span></span>${e.builtin?"":'<span class="tag">своё</span>'}</button>`).join(""):'<p class="muted">Ничего не нашлось.</p>';
 }
 function renderExList(){const l=$("#ex-list");if(l)l.innerHTML=exListHtml()}
 function openExInfo(id){
@@ -758,9 +845,11 @@ function openExInfo(id){
     <div class="card"><div class="eyebrow" style="margin-bottom:8px">${unit}</div>${lineChart(series)}</div>
     <h2>История</h2><div class="list">${hist.slice(0,30).map(h=>`<div class="card"><div class="row between small"><b>${esc(fmtDate(h.w.start))}</b><span class="muted">${esc(h.w.name)}</span></div><div class="small num" style="margin-top:4px">${h.e.sets.map(s=>esc(setText(s,type))+(s.t==="w"?" (р)":"")).join(" · ")}</div></div>`).join("")}</div>`
     :`<div class="empty"><b>Ещё не выполнялось</b><p>Добавьте упражнение в тренировку — здесь появятся рекорды и график.</p></div>`}
-    ${x&&!x.builtin?'<button class="btn block" data-editx>Изменить упражнение</button><button class="btn danger block" data-delx>Удалить упражнение</button>':""}`});
+    ${x?(x.builtin?`<button class="btn block" data-renx>Переименовать</button>${x.renamed?'<button class="btn block" data-resetx>Вернуть стандартное название</button>':""}`:'<button class="btn block" data-editx>Изменить упражнение</button><button class="btn danger block" data-delx>Удалить упражнение</button>'):""}`});
   sh.el.addEventListener("click",async ev=>{
     if(ev.target.closest("[data-editx]")){sh.close();openExerciseForm(x)}
+    if(ev.target.closest("[data-renx]")){sh.close();renameExercise(x.id)}
+    if(ev.target.closest("[data-resetx]")){sh.close();await del("custom",x.id);toast("Стандартное название возвращено");S.active&&S.tab==="workout"?rerenderActive():render()}
     if(ev.target.closest("[data-delx]")){if(await confirmBox("Удалить упражнение?","Прошлые тренировки с ним сохранятся.","Удалить")){sh.close();await del("custom",x.id);softRender()}}
   });
 }
@@ -806,7 +895,7 @@ function viewProgress(){
   // streak in weeks
   let streak=0;for(let i=N-1;i>=0;i--){if(per[i].length)streak++;else if(i===N-1)continue;else break}
   // top lifts
-  const best=new Map();for(const w of S.workouts)for(const e of w.exercises)if((e.type||"wr")==="wr"){const b=bestOf(e.sets);const cur=best.get(e.exId);if(!cur||b.w>cur.w)best.set(e.exId,{name:e.name,w:b.w,t:w.start,id:e.exId})}
+  const best=new Map();for(const w of S.workouts)for(const e of w.exercises)if((e.type||"wr")==="wr"){const b=bestOf(e.sets);const cur=best.get(e.exId);if(!cur||b.w>cur.w)best.set(e.exId,{name:nm(e),w:b.w,t:w.start,id:e.exId})}
   const lifts=[...best.values()].filter(b=>b.w>0).sort((a,b)=>b.w-a.w).slice(0,8);
   return`<h1 class="display">Прогресс</h1>
   <div class="tiles"><div class="tile"><b>${S.workouts.length}</b><span>тренировок всего</span></div><div class="tile"><b>${streak}</b><span>${plural(streak,"неделя","недели","недель")} подряд</span></div><div class="tile"><b>${recent.length}</b><span>за 30 дней</span></div><div class="tile"><b>${fmtDur(recent.reduce((a,w)=>a+(w.end-w.start)/1000,0))}</b><span>в зале за 30 дней</span></div></div>
@@ -834,19 +923,26 @@ function accountHtml(){
 function openSettings(){
   const sh=openSheet({title:"Настройки",body:`
     <h2>Аккаунт</h2><div class="list" id="acc">${accountHtml()}</div>
+    <h2>Тренер</h2><div class="list" id="coach-box">${coachBoxHtml()}</div>
     <h2>Тренировка</h2>
     <div class="field"><label for="set-rest">Отдых по умолчанию для новых упражнений</label><select class="select" id="set-rest">${restOptions(S.settings.rest)}</select></div>
     <h2>Резервная копия</h2>
-    <p class="small muted" style="margin:0">${S.workouts.length} ${plural(S.workouts.length,"тренировка","тренировки","тренировок")}, ${S.routines.length} ${plural(S.routines.length,"программа","программы","программ")}, ${S.custom.length} своих упражнений.</p>
+    <p class="small muted" style="margin:0">${S.workouts.length} ${plural(S.workouts.length,"тренировка","тренировки","тренировок")}, ${S.routines.length} ${plural(S.routines.length,"программа","программы","программ")}, ${S.custom.filter(c=>!c.id.startsWith("b:")).length} своих упражнений.</p>
     <button class="btn block" data-export>Скачать копию (JSON)</button>
     <label class="btn block" for="imp-file">Загрузить из копии…</label><input type="file" id="imp-file" accept=".json,application/json" hidden>
     <h2>Опасная зона</h2>
-    <button class="btn danger block" data-wipe>Удалить все данные</button>`});
+    <button class="btn danger block" data-wipe>Удалить все данные</button>
+    <p class="small muted" style="margin:0">Версия ${APP_VERSION}</p>`});
+  if(session&&S.coachLink===undefined)loadCoach();
   const redraw=()=>{$("#acc",sh.el).innerHTML=accountHtml()};
   const creds=()=>({email:$("#acc-email",sh.el).value.trim(),password:$("#acc-pass",sh.el).value});
   const msg=t=>{const m=$("#acc-msg",sh.el);if(m)m.textContent=t};
   sh.el.addEventListener("click",async ev=>{
     const t=ev.target.closest("button");if(!t)return;
+    if(t.hasAttribute("data-coach-create")){t.disabled=true;const client=(($("#coach-client",sh.el)||{}).value||"").trim().slice(0,60);const r=await sb.from("podhod_coach_links").insert({client_name:client}).select("token,client_name").single();t.disabled=false;if(r.error){toast("Не получилось: "+r.error.message);return}S.coachLink=r.data;$("#coach-box",sh.el).innerHTML=coachBoxHtml();return}
+    if(t.hasAttribute("data-coach-copy")){const u=coachLinkUrl();const f=()=>{const i=$("#coach-url",sh.el);i.focus();i.select();toast("Выделено — скопируйте вручную")};if(navigator.clipboard)navigator.clipboard.writeText(u).then(()=>toast("Ссылка скопирована"),f);else f();return}
+    if(t.hasAttribute("data-coach-share")){navigator.share({title:"Планы тренировок",url:coachLinkUrl()}).catch(()=>{});return}
+    if(t.hasAttribute("data-coach-revoke")){if(!(await confirmBox("Отозвать ссылку?","Тренер больше не сможет её открыть. Планы от тренера тоже удалятся — сначала добавьте нужные в свои программы.","Отозвать")))return;const r=await sb.from("podhod_coach_links").delete().eq("token",S.coachLink.token);if(r.error){toast(r.error.message);return}S.coachLink=null;S.coach=[];lsSave();$("#coach-box",sh.el).innerHTML=coachBoxHtml();render();return}
     if(t.hasAttribute("data-login")||t.hasAttribute("data-signup")){
       const c=creds();if(!c.email||c.password.length<6){msg("Введите почту и пароль не короче 6 символов.");return}
       t.disabled=true;msg(t.hasAttribute("data-login")?"Вхожу…":"Создаю аккаунт…");
@@ -861,7 +957,7 @@ function openSettings(){
       const warn=queue.length?` Внимание: ${queue.length} изменений ещё не отправлено — они пропадут.`:"";
       if(!(await confirmBox("Выйти из аккаунта?","Данные на этом устройстве будут очищены, в облаке они останутся."+warn,"Выйти")))return;
       await sb.auth.signOut();session=null;queue=[];qSave();
-      S.workouts=[];S.routines=[];S.custom=[];S.active=null;S.settings={rest:90};lsSave();
+      S.workouts=[];S.routines=[];S.custom=[];S.active=null;S.settings={rest:90};S.coach=[];S.coachLink=undefined;lsSave();
       try{localStorage.removeItem(LS_SYNCED)}catch(e){}
       setNote();setSync("signedout");sh.close();render();toast("Вы вышли");
     }
@@ -899,8 +995,12 @@ document.addEventListener("click",async ev=>{
   switch(act){
     case"settings":openSettings();break;
     case"start-empty":if(a){S.tab="workout";render();break}newActive(defaultName(),[]);break;
-    case"start-routine":{if(a){toast("Сначала завершите текущую тренировку");break}const r=S.routines.find(x=>x.id===b.dataset.id);if(r)newActive(r.name,r.items.map(it=>exEntry(it.exId,it.sets,it.rest)),r.id);break}
+    case"start-routine":{if(a){toast("Сначала завершите текущую тренировку");break}const r=S.routines.find(x=>x.id===b.dataset.id);if(r)newActive(r.name,r.items.map(it=>exEntry(it.exId,it.sets,it.rest,it)),r.id);break}
     case"new-routine":openRoutine(null);break;
+    case"coach-new":openRoutine(null,{title:"Новый план",onSave:coachSave});break;
+    case"coach-edit":{const p=CO.plans.find(x=>x.id===b.dataset.id);if(p)openRoutine(p,{title:"План",onSave:coachSave,onDelete:coachDelete});break}
+    case"start-coach":{if(a){toast("Сначала завершите текущую тренировку");break}const r=S.coach.find(x=>x.id===b.dataset.id);if(r)newActive(r.name,r.items.map(it=>exEntry(it.exId,it.sets,it.rest,it)),null);break}
+    case"copy-coach":{const r=S.coach.find(x=>x.id===b.dataset.id);if(r){await put("routines",{...JSON.parse(JSON.stringify(r)),id:newId(),created:Date.now()});toast("Добавлено в ваши программы");render()}break}
     case"edit-routine":openRoutine(S.routines.find(x=>x.id===b.dataset.id));break;
     case"sample-routines":{let t=Date.now();for(const s of SAMPLE_ROUTINES)await put("routines",{id:newId(),name:s.name,created:t++,items:s.items.map(([id,n,r])=>({exId:"b:"+id,sets:n,rest:r}))});toast("Добавлено 3 программы — меняйте под себя");render();break}
     case"add-ex":openPicker(ids=>{for(const id of ids)a.exercises.push(exEntry(id));saveActive();rerenderActive()});break;
@@ -912,7 +1012,7 @@ document.addEventListener("click",async ev=>{
       if(!s.done){const p=(prevSets(e.exId,a.start)||[])[j];
         if(e.type==="time"){if(s.s==null&&p&&p.s)s.s=p.s;if(!s.s){toast("Введите время в секундах");break}}
         else{if(s.r==null&&p&&p.r)s.r=p.r;if(s.w==null&&p&&p.w!=null)s.w=p.w;if(!s.r){toast("Введите число повторений");break}if(e.type==="wr"&&s.w==null)s.w=0}
-        s.done=true;startRest(e.rest,e.name)}
+        s.done=true;startRest(e.rest,nm(e))}
       else s.done=false;
       saveActive();rerenderActive();break}
     case"use-prev":{const e=a.exercises[i],p=(prevSets(e.exId,a.start)||[])[j];if(p){Object.assign(e.sets[j],{w:p.w,r:p.r,s:p.s});saveActive();rerenderActive()}break}
@@ -922,13 +1022,14 @@ document.addEventListener("click",async ev=>{
       {label:"Дроп-сет (Д)",act:()=>{e.sets[j].t="d";saveActive();rerenderActive()}},
       {label:"До отказа (О)",act:()=>{e.sets[j].t="f";saveActive();rerenderActive()}},
       {label:"Удалить подход",danger:true,act:()=>{e.sets.splice(j,1);saveActive();rerenderActive()}}]);break}
-    case"ex-menu":{const e=a.exercises[i];menu(e.name,[
+    case"ex-menu":{const e=a.exercises[i];menu(nm(e),[
       {label:e.note!=null?"Убрать заметку":"Добавить заметку",act:()=>{e.note=e.note!=null?null:"";saveActive();rerenderActive();if(e.note==="")setTimeout(()=>$(`[data-note="${i}"]`)?.focus(),30)}},
+      {label:"Переименовать упражнение",act:()=>renameExercise(e.exId)},
       {label:"Заменить упражнение",act:()=>openPicker(ids=>{const x=exById(ids[0]);Object.assign(e,{exId:x.id,name:x.name,muscle:x.muscle,type:x.type});saveActive();rerenderActive()},false)},
       ...(i>0?[{label:"Переместить выше",act:()=>{[a.exercises[i-1],a.exercises[i]]=[a.exercises[i],a.exercises[i-1]];saveActive();rerenderActive()}}]:[]),
       ...(i<a.exercises.length-1?[{label:"Переместить ниже",act:()=>{[a.exercises[i+1],a.exercises[i]]=[a.exercises[i],a.exercises[i+1]];saveActive();rerenderActive()}}]:[]),
       {label:"Удалить упражнение",danger:true,act:()=>{a.exercises.splice(i,1);saveActive();rerenderActive()}}]);break}
-    case"ex-rest":{const e=a.exercises[i];menu("Отдых: "+e.name,[0,30,60,90,120,150,180,240].map(sv=>({label:(sv?fmtRest(sv):"Выключить")+(sv===e.rest?"  ✓":""),act:()=>{e.rest=sv;saveActive();rerenderActive()}})));break}
+    case"ex-rest":{const e=a.exercises[i];menu("Отдых: "+nm(e),[0,30,60,90,120,150,180,240].map(sv=>({label:(sv?fmtRest(sv):"Выключить")+(sv===e.rest?"  ✓":""),act:()=>{e.rest=sv;saveActive();rerenderActive()}})));break}
     case"rest-adj":restAdj(+b.dataset.d);break;
     case"rest-skip":rest=null;renderFloat();break;
     case"ex-info":openExInfo(b.dataset.id);break;
