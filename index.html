@@ -128,6 +128,8 @@ h2{font:700 22px/1.1 var(--f-display);text-transform:uppercase;letter-spacing:.0
 .sr{position:relative;background:var(--surface);border-radius:8px;padding:2px 0;transition:transform .2s ease;touch-action:pan-y;user-select:none;-webkit-user-select:none}
 .sr.dragging{transition:none}
 .sw.swiping .delbg{opacity:1}
+.typebg{opacity:0;position:absolute;inset:0;background:var(--accent);color:var(--accent-ink);display:flex;align-items:center;padding-left:16px;font-weight:700;font-size:14px}
+.sw.swiping.right .typebg{opacity:1}
 .sh span{white-space:nowrap;font-size:10px;letter-spacing:.03em}
 .sr.done{background:var(--ok-soft)}
 .sr .setlbl,.sr .chk,.sr .cell{justify-self:center}
@@ -368,7 +370,7 @@ const COLL={workouts:"workouts",routines:"routines",custom:"exercises"};
 const KEY_BY_COLL={workouts:"workouts",routines:"routines",exercises:"custom"};
 let sb=null,session=null,queue=[];
 const COACH=new URLSearchParams(location.search).get("coach");
-const APP_VERSION="8";
+const APP_VERSION="9";
 async function checkUpdate(){try{const r=await fetch("version.json?t="+Date.now(),{cache:"no-store"});if(!r.ok)return;const v=(await r.json()).v;const busy=document.activeElement&&document.activeElement.matches("input,textarea,select");if(v&&String(v)!==APP_VERSION&&!busy&&!document.querySelector(".sheet,.pop"))location.reload()}catch(e){}}
 function sortData(){S.workouts.sort((a,b)=>b.start-a.start);S.routines.sort((a,b)=>(a.created||0)-(b.created||0));S.custom.sort((a,b)=>a.name.localeCompare(b.name,"ru"))}
 function lsSave(){if(COACH)return;try{localStorage.setItem(LS_KEY,JSON.stringify({workouts:S.workouts,routines:S.routines,custom:S.custom,active:S.active,settings:S.settings,coach:S.coach}))}catch(e){}}
@@ -667,7 +669,7 @@ function exCard(e,i){
         const gw=!s.done&&s.auto&&s.auto.w&&s.w!=null,gr=!s.done&&s.auto&&s.auto.r&&s.r!=null;
         const phw=type==="bw"?(pw||"+0"):(pw||"0"),phr=pr||"0";
         return`<div><input class="cell" inputmode="decimal" data-f="w" data-i="${i}" data-j="${j}" data-ph="${phw}" value="${gw?"":fw(s.w)}" placeholder="${gw?fw(s.w):phw}" aria-label="Вес"></div><div><input class="cell" inputmode="numeric" data-f="r" data-i="${i}" data-j="${j}" data-ph="${phr}" value="${gr?"":(s.r??"")}" placeholder="${gr?s.r:phr}" aria-label="Повторения"></div>`})();
-    return`<div class="sw"><div class="delbg" aria-hidden="true">Удалить</div><div class="sr${s.done?" done":""}" data-i="${i}" data-j="${j}"><div><button class="setlbl t-${s.t||"n"}" data-act="set-menu" data-i="${i}" data-j="${j}" aria-label="Тип подхода">${lbl}</button></div><div class="prev">${p?`<button data-act="use-prev" data-i="${i}" data-j="${j}">${esc(ptxt)}</button>`:"—"}</div>${inputs}<div><button class="chk" data-act="set-done" data-i="${i}" data-j="${j}" aria-label="Подход выполнен" aria-pressed="${!!s.done}">${ICON.check}</button></div></div></div>`;
+    return`<div class="sw"><div class="delbg" aria-hidden="true">Удалить</div><div class="typebg" aria-hidden="true">Тип подхода</div><div class="sr${s.done?" done":""}" data-i="${i}" data-j="${j}"><div><button class="setlbl t-${s.t||"n"}" data-act="set-menu" data-i="${i}" data-j="${j}" aria-label="Тип подхода">${lbl}</button></div><div class="prev">${p?`<button data-act="use-prev" data-i="${i}" data-j="${j}">${esc(ptxt)}</button>`:"—"}</div>${inputs}<div><button class="chk" data-act="set-done" data-i="${i}" data-j="${j}" aria-label="Подход выполнен" aria-pressed="${!!s.done}">${ICON.check}</button></div></div></div>`;
   }).join("");
   const head=type==="time"?'<span>Подход</span><span>Прошлый</span><span>Секунды</span><span></span>':`<span>Подход</span><span>Прошлый</span><span>${type==="bw"?"+кг":"кг"}</span><span>Повт.</span><span></span>`;
   return`<article class="ex" data-ex="${i}">
@@ -1024,7 +1026,16 @@ function openSettings(){
   };
 }
 
-/* ---------- swipe a set row to the left to delete it ---------- */
+/* ---------- set type menu (tap the set number or swipe the row right) ---------- */
+function setTypeMenu(i,j){
+  const a=S.active;if(!a||!a.exercises[i]||!a.exercises[i].sets[j])return;const e=a.exercises[i],s=e.sets[j],cur=s.t||"n";
+  const pick=t=>()=>{s.t=t;saveActive();rerenderActive()};
+  const opt=(t,label)=>({label:label+(cur===t?"  ✓":""),act:pick(t)});
+  menu("Подход "+(j+1)+" · "+nm(e),[opt("n","Рабочий"),opt("w","Разминочный (Р) — не идёт в объём"),opt("f","До отказа (О)"),opt("d","Дроп-сет (Д)"),
+    {label:"Удалить подход",danger:true,act:()=>deleteSet(i,j)}]);
+}
+
+/* ---------- swipe a set row: left deletes it, right changes its type ---------- */
 let swp=null,swipeBlock=0;
 function deleteSet(i,j){
   const a=S.active;if(!a||!a.exercises[i])return;const e=a.exercises[i];const removed=e.sets.splice(j,1)[0];if(!removed)return;
@@ -1036,18 +1047,19 @@ document.addEventListener("pointermove",ev=>{
   if(!swp||ev.pointerId!==swp.id)return;const dx=ev.clientX-swp.x,dy=ev.clientY-swp.y;
   if(!swp.on){
     if(Math.abs(dy)>10&&Math.abs(dy)>Math.abs(dx)){swp=null;return}
-    if(dx<-12&&Math.abs(dx)>Math.abs(dy)*1.2){swp.on=true;swp.r.classList.add("dragging");swp.r.parentElement.classList.add("swiping");if(document.activeElement&&swp.r.contains(document.activeElement))document.activeElement.blur();try{swp.r.setPointerCapture(ev.pointerId)}catch(e){}}
+    if(Math.abs(dx)>12&&Math.abs(dx)>Math.abs(dy)*1.2){swp.on=true;swp.dir=dx<0?-1:1;swp.r.classList.add("dragging");swp.r.parentElement.classList.add("swiping");swp.r.parentElement.classList.toggle("right",swp.dir>0);if(document.activeElement&&swp.r.contains(document.activeElement))document.activeElement.blur();try{swp.r.setPointerCapture(ev.pointerId)}catch(e){}}
     else return;
   }
-  swp.dx=Math.min(0,dx);swp.r.style.transform=`translateX(${swp.dx}px)`;ev.preventDefault();
+  swp.dx=swp.dir<0?Math.min(0,dx):Math.max(0,Math.min(150,dx));swp.r.style.transform=`translateX(${swp.dx}px)`;ev.preventDefault();
 },{passive:false});
 document.addEventListener("pointerup",()=>{
   if(!swp)return;const s=swp;swp=null;if(!s.on)return;swipeBlock=Date.now();s.r.classList.remove("dragging");
   const w=s.r.offsetWidth;
+  if(s.dir>0){s.r.style.transform="";setTimeout(()=>s.r.parentElement&&s.r.parentElement.classList.remove("swiping","right"),220);if(s.dx>70)setTypeMenu(+s.r.dataset.i,+s.r.dataset.j);return}
   if(s.dx<-Math.min(120,w*.35)){s.r.style.transform=`translateX(${-w}px)`;setTimeout(()=>deleteSet(+s.r.dataset.i,+s.r.dataset.j),170)}
   else{s.r.style.transform="";setTimeout(()=>s.r.parentElement&&s.r.parentElement.classList.remove("swiping"),220)}
 });
-document.addEventListener("pointercancel",()=>{if(swp&&swp.on){swp.r.classList.remove("dragging");swp.r.style.transform="";swp.r.parentElement.classList.remove("swiping")}swp=null});
+document.addEventListener("pointercancel",()=>{if(swp&&swp.on){swp.r.classList.remove("dragging");swp.r.style.transform="";swp.r.parentElement.classList.remove("swiping","right")}swp=null});
 
 /* ---------- events ---------- */
 document.addEventListener("click",async ev=>{
@@ -1081,12 +1093,7 @@ document.addEventListener("click",async ev=>{
       else s.done=false;
       saveActive();rerenderActive();break}
     case"use-prev":{const e=a.exercises[i],p=(prevSets(e.exId,a.start)||[])[j];if(p){Object.assign(e.sets[j],{w:p.w,r:p.r,s:p.s});saveActive();rerenderActive()}break}
-    case"set-menu":{const e=a.exercises[i];menu("Подход",[
-      {label:"Рабочий",act:()=>{e.sets[j].t="n";saveActive();rerenderActive()}},
-      {label:"Разминочный (Р) — не идёт в объём",act:()=>{e.sets[j].t="w";saveActive();rerenderActive()}},
-      {label:"Дроп-сет (Д)",act:()=>{e.sets[j].t="d";saveActive();rerenderActive()}},
-      {label:"До отказа (О)",act:()=>{e.sets[j].t="f";saveActive();rerenderActive()}},
-      {label:"Удалить подход",danger:true,act:()=>{e.sets.splice(j,1);saveActive();rerenderActive()}}]);break}
+    case"set-menu":setTypeMenu(i,j);break;
     case"ex-menu":{const e=a.exercises[i];menu(nm(e),[
       {label:e.note!=null?"Убрать заметку":"Добавить заметку",act:()=>{e.note=e.note!=null?null:"";saveActive();rerenderActive();if(e.note==="")setTimeout(()=>$(`[data-note="${i}"]`)?.focus(),30)}},
       {label:"Переименовать упражнение",act:()=>renameExercise(e.exId)},
