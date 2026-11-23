@@ -1,6 +1,6 @@
 // Офлайн-режим: приложение открывается и без интернета.
-const CACHE = "podhod-v2";
-const SHELL = ["./", "./index.html", "./config.js", "./manifest.webmanifest", "./icon-192.png", "./apple-touch-icon.png",
+const CACHE = "podhod-v3";
+const SHELL = ["./", "./index.html", "./config.js", "./ai.js", "./manifest.webmanifest", "./icon-192.png", "./apple-touch-icon.png",
   "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.js"];
 self.addEventListener("install", e => {
   e.waitUntil(caches.open(CACHE).then(c => Promise.all(SHELL.map(u => c.add(u).catch(() => {})))).then(() => self.skipWaiting()));
