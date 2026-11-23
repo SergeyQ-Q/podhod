@@ -944,7 +944,22 @@ document.addEventListener("input",ev=>{
   if(!S.active)return;
   if(t.id==="aw-name"){S.active.name=t.value;saveActive();return}
   if(t.dataset.note!=null){S.active.exercises[+t.dataset.note].note=t.value;saveActive();return}
-  if(t.dataset.f){const s=S.active.exercises[+t.dataset.i].sets[+t.dataset.j];const v=num(t.value);s[t.dataset.f]=t.dataset.f==="w"?v:(v==null?null:Math.round(v));saveActive();if(s.done)updateActiveStats()}
+  if(t.dataset.f){
+    const i=+t.dataset.i,j=+t.dataset.j,f=t.dataset.f,e=S.active.exercises[i],s=e.sets[j];
+    const v=num(t.value),val=f==="w"?v:(v==null?null:Math.round(v));
+    s[f]=val;if(s.auto)delete s.auto[f]; // typed by hand: no longer auto-filled
+    // copy the value down to the following sets of the same kind (warm-up -> warm-up, working -> working)
+    // that are not done yet and are either empty or were filled this way before
+    const warm=s.t==="w";
+    for(let k=j+1;k<e.sets.length;k++){
+      const o=e.sets[k];if(o.done||(o.t==="w")!==warm)continue;
+      if(o[f]==null||(o.auto&&o.auto[f])){
+        o[f]=val;o.auto={...(o.auto||{})};if(val==null)delete o.auto[f];else o.auto[f]=true;
+        const el=document.querySelector(`input[data-f="${f}"][data-i="${i}"][data-j="${k}"]`);
+        if(el)el.value=val==null?"":(f==="w"?fmtN(val).replace(/\s/g,""):String(val));
+      }
+    }
+    saveActive();updateActiveStats()}
 });
 document.addEventListener("keydown",ev=>{if(ev.key==="Escape"){const p=document.querySelector(".pop");if(p){p.click();return}const s=sheets[sheets.length-1];if(s)$("[data-close]",s)?.click()}});
 init();
